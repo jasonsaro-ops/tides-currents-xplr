@@ -1260,34 +1260,221 @@ function renderWatchSlots() {
   const box = document.getElementById("watchSlots");
   if (!box) return;
   if (!watchedList.length) {
-    box.innerHTML = `<div class="watch-empty">Add a CO-OPS station or NDBC buoy ID above to monitor in realtime (updates every 2 min, SOL chime on change)</div>`;
+    box.innerHTML = `<div class="watch-empty">Select a state/territory then a station (or type an ID) to monitor in realtime — click a card for full data & tide graph</div>`;
     return;
   }
-  box.innerHTML = watchedList.map(w => {
-    const d = w.data;
+  box.innerHTML = watchedList.map((w, i) => {
+    const d = w.data || {};
+    const exp = w.expanded ? "expanded" : "";
     let vals = "—";
-    if (d) {
-      if (w.type === "buoy") vals = `Wind ${d.wspd || "—"} m/s · Waves ${d.wvht || "—"} m`;
-      else vals = `${d.v != null ? d.v + " ft" : "—"}`;
+    let more = "";
+    if (w.type === "buoy") {
+      vals = `Wind ${d.wspd || "—"} m/s · Waves ${d.wvht || "—"} m`;
+      more = `Air ${d.atmp || "—"}°C · Water ${d.wtmp || "—"}°C · ${d.pres || "—"} hPa`;
+    } else if (w.type === "currents") {
+      vals = `${d.s != null ? d.s + " kn" : "—"} @ ${d.d != null ? d.d + "°" : "—"}`;
+    } else {
+      vals = d.v != null ? `${d.v} ft MLLW` : "—";
+      if (w.extra) {
+        const e = w.extra;
+        more = [
+          e.air != null ? `Air ${e.air}°F` : null,
+          e.wtmp != null ? `WTemp ${e.wtmp}°F` : null,
+          e.wind != null ? `Wind ${e.wind} kn` : null,
+          e.nextTide ? `Next ${e.nextTide}` : null
+        ].filter(Boolean).join(" · ");
+      }
     }
-    return `<div class="watch-card" data-id="${w.id}">
+    const chartId = `watchChart_${w.id.replace(/[^a-zA-Z0-9]/g, "")}`;
+    return `<div class="watch-card ${exp}" data-id="${w.id}" data-idx="${i}">
       <div class="wc-name">${w.name}</div>
-      <div class="wc-id">${w.id} · ${w.type}</div>
+      <div class="wc-id">${w.id} · ${(w.type || "").toUpperCase()} · ${w.state || ""}</div>
       <div class="wc-vals">${vals}</div>
-      <div class="wc-time">${d?.t || ""}</div>
+      ${more ? `<div class="wc-more">${more}</div>` : ""}
+      <div class="wc-time">${d.t || w.updated || ""}</div>
+      ${w.expanded ? `<div class="wc-chart"><canvas id="${chartId}"></canvas></div>
+        <div class="wc-actions">
+          <button data-act="modal">OPEN FULL</button>
+          <button data-act="collapse">COLLAPSE</button>
+          <button data-act="remove">REMOVE</button>
+        </div>` : `<div class="wc-actions"><button data-act="expand">EXPAND + GRAPH</button><button data-act="remove">×</button></div>`}
     </div>`;
   }).join("");
+
   box.querySelectorAll(".watch-card").forEach(card => {
-    card.onclick = () => {
-      const id = card.dataset.id;
-      const st = allStations.find(s => s.id === id) || buoyStations.find(b => b.id === id);
-      if (st) {
-        if (st.type === "buoy" || buoyStations.some(b => b.id === id)) openBuoy(st);
-        else openStation(st);
+    const id = card.dataset.id;
+    const idx = parseInt(card.dataset.idx, 10);
+    card.querySelectorAll("button").forEach(btn => {
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        const act = btn.dataset.act;
+        if (act === "remove") {
+          watchedList = watchedList.filter(w => w.id !== id);
+          renderWatchSlots();
+        } else if (act === "collapse") {
+          watchedList[idx].expanded = false;
+          renderWatchSlots();
+        } else if (act === "expand") {
+          watchedList[idx].expanded = true;
+          renderWatchSlots();
+          setTimeout(() => drawWatchChart(watchedList[idx]), 50);
+        } else if (act === "modal") {
+          openWatchStation(id);
+        }
+      };
+    });
+    card.onclick = (ev) => {
+      if (ev.target.tagName === "BUTTON" || ev.target.tagName === "CANVAS") return;
+      const w = watchedList[idx];
+      if (!w.expanded) {
+        w.expanded = true;
+        renderWatchSlots();
+        setTimeout(() => drawWatchChart(w), 50);
+      } else {
+        openWatchStation(id);
       }
     };
   });
+
+  // redraw charts for already expanded
+  watchedList.forEach(w => {
+    if (w.expanded) setTimeout(() => drawWatchChart(w), 80);
+  });
 }
+
+async function drawWatchChart(w) {
+  if (!w) return;
+  const chartId = `watchChart_${w.id.replace(/[^a-zA-Z0-9]/g, "")}`;
+  const canvas = document.getElementById(chartId);
+  if (!canvas) return;
+
+  // Destroy previous chart on this canvas if any
+  if (w._chart) {
+    try { w._chart.destroy(); } catch (_) {}
+    w._chart = null;
+  }
+
+  const today = new Date();
+  const fmt = (d) =>
+    `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+
+  let labels = [], values = [], hilo = [];
+
+  // Prefer hourly predictions (harmonic); fall back to hilo
+  try {
+    const urlH = `${DATAAPI}?begin_date=${fmt(today)}&range=48&station=${w.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=h&units=english&format=json&application=tides-currents-xplr`;
+    const resH = await fetch(urlH);
+    const jsonH = await resH.json();
+    if (jsonH.predictions && jsonH.predictions.length) {
+      labels = jsonH.predictions.map(p => p.t);
+      values = jsonH.predictions.map(p => parseFloat(p.v));
+    }
+  } catch (_) {}
+
+  try {
+    const urlL = `${DATAAPI}?begin_date=${fmt(today)}&range=72&station=${w.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
+    const resL = await fetch(urlL);
+    const jsonL = await resL.json();
+    if (jsonL.predictions && jsonL.predictions.length) {
+      hilo = jsonL.predictions;
+    }
+  } catch (_) {}
+
+  // If no hourly, synthesize stepped series from hilo for display
+  if (!values.length && hilo.length) {
+    labels = hilo.map(p => p.t);
+    values = hilo.map(p => parseFloat(p.v));
+  }
+
+  // Also try observed water level if available
+  let obsLabels = [], obsValues = [];
+  try {
+    const end = new Date();
+    const begin = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+    const urlO = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(end)}&station=${w.id}&product=water_level&datum=MLLW&time_zone=lst_ldt&units=english&format=json&application=tides-currents-xplr`;
+    const resO = await fetch(urlO);
+    const jsonO = await resO.json();
+    if (jsonO.data && jsonO.data.length) {
+      // subsample for chart density
+      const step = Math.max(1, Math.floor(jsonO.data.length / 80));
+      jsonO.data.forEach((d, i) => {
+        if (i % step === 0) {
+          obsLabels.push(d.t);
+          obsValues.push(parseFloat(d.v));
+        }
+      });
+    }
+  } catch (_) {}
+
+  if (!values.length && !obsValues.length) {
+    canvas.parentElement.innerHTML = `<div style="color:var(--text-muted);font-size:11px;padding:20px 0;text-align:center">No prediction / water level series available</div>`;
+    return;
+  }
+
+  const datasets = [];
+  if (values.length) {
+    datasets.push({
+      label: "Predicted (ft MLLW)",
+      data: values,
+      borderColor: "#a29bfe",
+      backgroundColor: "rgba(162,155,254,0.12)",
+      borderWidth: 1.5,
+      pointRadius: values.length < 20 ? 3 : 0,
+      tension: 0.3,
+      fill: true
+    });
+  }
+  if (obsValues.length) {
+    // separate chart labels issue - if only obs, use obs labels
+    if (!values.length) {
+      labels = obsLabels;
+      datasets.push({
+        label: "Observed (ft MLLW)",
+        data: obsValues,
+        borderColor: "#e67e22",
+        backgroundColor: "rgba(230,126,34,0.1)",
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        fill: true
+      });
+    }
+  }
+
+  const ctx = canvas.getContext("2d");
+  w._chart = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: "#8b9aab", font: { size: 10 } } },
+        title: {
+          display: true,
+          text: hilo.length ? `Next tides: ${hilo.slice(0,4).map(p => `${p.type} ${p.v}ft @ ${p.t}`).join(" · ")}` : "Tide curve",
+          color: "#8b9aab",
+          font: { size: 10 }
+        }
+      },
+      scales: {
+        x: { ticks: { color: "#5a6a7a", maxTicksLimit: 6, font: { size: 8 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+        y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" }, title: { display: true, text: "ft", color: "#5a6a7a", font: { size: 9 } } }
+      }
+    }
+  });
+}
+
+function openWatchStation(id) {
+  const st = allStations.find(s => s.id === id)
+    || tidePredStations.find(s => s.id === id)
+    || buoyStations.find(b => b.id === id);
+  if (!st) return;
+  if (st.type === "buoy" || buoyStations.some(b => b.id === id)) openBuoy(st);
+  else if (st.type === "tidepredictions" || tidePredStations.some(t => t.id === id)) openTidePred(st);
+  else openStation(st);
+}
+
 
 async function refreshAllWatches() {
   if (!watchedList.length) return;
@@ -1311,12 +1498,40 @@ async function refreshAllWatches() {
         }
         w.data = d;
       }
+      // enrich with met + next tide
+      const extra = {};
+      try {
+        const air = await fetchLatest(w.id, "air_temperature");
+        if (air) extra.air = air.v;
+      } catch (_) {}
+      try {
+        const wt = await fetchLatest(w.id, "water_temperature");
+        if (wt) extra.wtmp = wt.v;
+      } catch (_) {}
+      try {
+        const wind = await fetchLatest(w.id, "wind");
+        if (wind) extra.wind = wind.s;
+      } catch (_) {}
+      try {
+        const today = new Date();
+        const fmt = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}`;
+        const url = `${DATAAPI}?begin_date=${fmt(today)}&range=48&station=${w.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.predictions && json.predictions[0]) {
+          const p = json.predictions[0];
+          extra.nextTide = `${p.type} ${p.v}ft ${p.t}`;
+          w.hilo = json.predictions;
+        }
+      } catch (_) {}
+      w.extra = extra;
+      w.updated = new Date().toISOString().substr(11, 8) + " UTC";
     }
   }
   renderWatchSlots();
   if (anyChange) {
     playSolChime();
-    renderMarkers(); // pulse fresh
+    renderMarkers();
   }
 }
 
@@ -1558,11 +1773,57 @@ async function openTidePred(s) {
         <a href="https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${s.id}" target="_blank" style="color:var(--orange)">Full NOAA Tide Predictions ↗</a>
       </div>
       <div class="data-grid">${rows}</div>
+      <div style="color:var(--text-dim);font-size:11px;margin:12px 0 6px">PREDICTED TIDE CURVE (48h)</div>
+      <div class="chart-wrap"><canvas id="tidePredChart"></canvas></div>
       <div style="margin-top:12px">
         <button id="addTideToMapBtn" class="watch-btn" style="margin-right:8px">☆ WATCH THIS STATION</button>
         <button id="showOnMapBtn" class="watch-btn">CENTER ON MAP</button>
       </div>
     `;
+    // Draw hourly curve when available
+    (async () => {
+      try {
+        const urlH = `${DATAAPI}?begin_date=${fmt(today)}&range=48&station=${s.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=h&units=english&format=json&application=tides-currents-xplr`;
+        const resH = await fetch(urlH);
+        const jsonH = await resH.json();
+        let labs = [], vals = [];
+        if (jsonH.predictions && jsonH.predictions.length) {
+          labs = jsonH.predictions.map(p => p.t);
+          vals = jsonH.predictions.map(p => parseFloat(p.v));
+        } else {
+          labs = json.predictions.map(p => p.t);
+          vals = json.predictions.map(p => parseFloat(p.v));
+        }
+        const canvas = document.getElementById("tidePredChart");
+        if (!canvas || !vals.length) return;
+        if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+        chartInstance = new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: {
+            labels: labs,
+            datasets: [{
+              label: "Predicted tide (ft MLLW)",
+              data: vals,
+              borderColor: "#a29bfe",
+              backgroundColor: "rgba(162,155,254,0.15)",
+              borderWidth: 2,
+              pointRadius: vals.length < 24 ? 3 : 0,
+              tension: 0.35,
+              fill: true
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: "#5a6a7a", maxTicksLimit: 8, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+              y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" }, title: { display: true, text: "ft MLLW", color: "#5a6a7a" } }
+            }
+          }
+        });
+      } catch (e) { console.warn("tide chart", e); }
+    })();
     document.getElementById("addTideToMapBtn")?.addEventListener("click", () => {
       addToWatch(s.id);
       showToast(`Added ${s.name} to watch panel`);
