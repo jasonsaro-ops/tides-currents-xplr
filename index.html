@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TIDES &amp; CURRENTS XPLR</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/esri-leaflet-geocoder@3.1.4/dist/esri-leaflet-geocoder.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top Header Bar -->
+    <header class="top-bar">
+      <div class="logo-section">
+        <div class="logo-mark">◈</div>
+        <div class="logo-text">
+          <span class="title">TIDES &amp; CURRENTS</span>
+          <span class="subtitle">XPLR // NOAA CO-OPS</span>
+        </div>
+      </div>
+      <div class="search-section">
+        <input type="text" id="searchInput" placeholder="SEARCH STATION / STATE / ID..." autocomplete="off" />
+        <button id="searchBtn" title="Search">⌕</button>
+      </div>
+      <div class="status-section">
+        <div class="status-item">
+          <span class="label">STATIONS</span>
+          <span class="value" id="stationCount">--</span>
+        </div>
+        <div class="status-item">
+          <span class="label">ACTIVE</span>
+          <span class="value" id="activeCount">--</span>
+        </div>
+        <div class="status-item">
+          <span class="label">UTC</span>
+          <span class="value" id="utcClock">--:--:--</span>
+        </div>
+        <div class="status-item live">
+          <span class="pulse"></span>
+          <span class="label">LIVE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-grid">
+      <!-- Left Panel: Filters + Legend -->
+      <aside class="left-panel">
+        <section class="panel-section">
+          <div class="section-header">
+            <span class="sec-title">FILTERS</span>
+            <button class="icon-btn" id="resetFilters" title="Reset">↺</button>
+          </div>
+          <div class="filter-group">
+            <label>STATE / REGION</label>
+            <select id="stateFilter">
+              <option value="">ALL STATES</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>DATA TYPE</label>
+            <select id="typeFilter">
+              <option value="">ALL TYPES</option>
+              <option value="waterlevels">WATER LEVELS</option>
+              <option value="currents">CURRENTS</option>
+              <option value="met">METEOROLOGICAL</option>
+              <option value="ports">PORTS®</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>PRODUCT OVERLAY</label>
+            <select id="productFilter">
+              <option value="none">NONE</option>
+              <option value="water_level">WATER LEVEL (MLLW)</option>
+              <option value="air_temperature">AIR TEMPERATURE</option>
+              <option value="water_temperature">WATER TEMPERATURE</option>
+              <option value="air_pressure">BAROMETRIC PRESSURE</option>
+              <option value="wind">WINDS</option>
+              <option value="humidity">RELATIVE HUMIDITY</option>
+              <option value="visibility">VISIBILITY</option>
+              <option value="air_gap">AIR GAP</option>
+              <option value="currents">CURRENTS</option>
+            </select>
+          </div>
+          <div class="filter-group checkbox-group">
+            <label><input type="checkbox" id="showWaterLevels" checked /> WATER LEVELS</label>
+            <label><input type="checkbox" id="showCurrents" checked /> CURRENTS</label>
+            <label><input type="checkbox" id="showPorts" checked /> PORTS® ONLY</label>
+            <label><input type="checkbox" id="showWarnings" /> WARNINGS / THRESHOLDS</label>
+          </div>
+        </section>
+
+        <section class="panel-section legend-section">
+          <div class="section-header">
+            <span class="sec-title">LEGEND // DATA</span>
+          </div>
+          <ul class="legend-list" id="legendList">
+            <li><span class="swatch none"></span> NONE</li>
+            <li><span class="swatch wl"></span> WATER LEVEL (MLLW)</li>
+            <li><span class="swatch at"></span> AIR TEMPERATURE</li>
+            <li><span class="swatch wt"></span> WATER TEMPERATURE</li>
+            <li><span class="swatch bp"></span> BAROMETRIC PRESSURE</li>
+            <li><span class="swatch wind"></span> WINDS</li>
+            <li><span class="swatch rh"></span> RELATIVE HUMIDITY</li>
+            <li><span class="swatch vis"></span> VISIBILITY</li>
+            <li><span class="swatch chart"></span> NAUTICAL CHARTS</li>
+            <li><span class="swatch hybrid"></span> IMAGERY / HYBRID / STREETS / TOPO</li>
+            <li><span class="swatch wlmet"></span> WATER LEVEL + MET</li>
+            <li><span class="swatch wlon"></span> WATER LEVELS</li>
+            <li><span class="swatch met"></span> METEOROLOGICAL</li>
+            <li><span class="swatch airgap"></span> AIR GAP</li>
+            <li><span class="swatch curr"></span> CURRENTS</li>
+          </ul>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-header">
+            <span class="sec-title">BASEMAP</span>
+          </div>
+          <div class="basemap-btns">
+            <button class="bm-btn active" data-bm="dark">DARK</button>
+            <button class="bm-btn" data-bm="imagery">IMAGERY</button>
+            <button class="bm-btn" data-bm="topo">TOPO</button>
+            <button class="bm-btn" data-bm="streets">STREETS</button>
+            <button class="bm-btn" data-bm="ocean">OCEAN</button>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Center: Map -->
+      <section class="map-container">
+        <div id="map"></div>
+        <div class="map-overlay-top">
+          <div class="coords" id="mapCoords">LAT -- LON --</div>
+          <div class="zoom-level" id="zoomLevel">Z --</div>
+        </div>
+        <div class="map-controls">
+          <button id="fitUSA" title="Fit USA">⌂</button>
+          <button id="toggleClusters" title="Toggle Clusters">◉</button>
+        </div>
+      </section>
+
+      <!-- Right Panel: Active / Realtime -->
+      <aside class="right-panel">
+        <section class="panel-section">
+          <div class="section-header">
+            <span class="sec-title">REALTIME // ACTIVE</span>
+            <button class="icon-btn" id="refreshActive" title="Refresh">↻</button>
+          </div>
+          <div id="activeList" class="active-list">
+            <div class="loading">LOADING PORTS &amp; ACTIVE SITES...</div>
+          </div>
+        </section>
+
+        <section class="panel-section compact">
+          <div class="section-header">
+            <span class="sec-title">QUICK STATES</span>
+          </div>
+          <div class="quick-states" id="quickStates"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-header">
+            <span class="sec-title">SOURCES</span>
+          </div>
+          <div class="sources">
+            ESRI · TOMTOM · GARMIN · FAO · NOAA · USGS<br />
+            CO-OPS MDAPI · DATA API · PORTS®
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <!-- Floating Station Window -->
+    <div id="stationModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span class="data-tag">DATA</span>
+            <span id="modalStationName">STATION</span>
+            <span id="modalStationId" class="id-tag"></span>
+          </div>
+          <button class="close-btn" id="closeModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-meta" id="modalMeta"></div>
+          <div class="modal-tabs">
+            <button class="tab active" data-tab="latest">LATEST</button>
+            <button class="tab" data-tab="water">WATER LEVEL</button>
+            <button class="tab" data-tab="met">MET</button>
+            <button class="tab" data-tab="currents">CURRENTS</button>
+            <button class="tab" data-tab="predictions">PREDICTIONS</button>
+          </div>
+          <div class="tab-content" id="tabContent">
+            <div class="loading">FETCHING REAL-TIME DATA...</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <a id="officialLink" href="#" target="_blank" rel="noopener">OFFICIAL NOAA PAGE ↗</a>
+          <span class="update-time" id="modalUpdateTime"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+  <script src="https://unpkg.com/esri-leaflet-vector@4.2.3/dist/esri-leaflet-vector.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
