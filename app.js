@@ -22,6 +22,12 @@ let watchedStation = null;
 let lastDataHash = {};          // for detecting updates → chime
 let overlayMode = "none";       // none | water_level | air_temperature | ... | all
 let latestValues = {};          // stationId -> {product: value}
+let buoyStations = [];          // NDBC buoys from latest_obs
+let showBuoys = true;
+let soundEnabled = true;
+let watchedList = [];           // array of {id, name, type, data}
+let buoyLayer = null;
+let freshIds = new Set();       // stations with recent data updates (for pulse)
 
 // Priority Mid-Atlantic stations (pinned top of Active)
 const MID_ATLANTIC_PRIORITY = [
@@ -60,15 +66,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   initMap();
   bindUI();
   await loadStations();
+  await loadBuoys();
   populateFilters();
   renderMarkers();
   loadActivePanel();
   // Realtime refresh every 2 minutes
   setInterval(() => {
     loadActivePanel(true);
-    if (watchedStation) refreshWatch();
+    refreshAllWatches();
     if (selectedStation) {
-      // soft refresh of open modal latest tab if open
       const activeTab = document.querySelector(".tab.active");
       if (activeTab && activeTab.dataset.tab === "latest") loadTab("latest", true);
     }
@@ -87,6 +93,7 @@ function initClock() {
 
 // ========== SOL CHIME (Web Audio approximation of The Martian Sol ping) ==========
 function playSolChime() {
+  if (!soundEnabled) return;
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const now = ctx.currentTime;
@@ -1012,3 +1019,223 @@ function showToast(msg) {
   t.classList.remove("hidden");
   setTimeout(() => t.classList.add("hidden"), 3400);
 }
+
+
+// ========== NDBC BUOYS ==========
+async function loadBuoys() {
+  try {
+    const res = await fetch("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt");
+    const text = await res.text();
+    const lines = text.trim().split("\n").filter(l => l && !l.startsWith("#"));
+    buoyStations = [];
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 5) continue;
+      const id = parts[0];
+      const lat = parseFloat(parts[1]);
+      const lon = parseFloat(parts[2]);
+      if (isNaN(lat) || isNaN(lon)) continue;
+      // Only US-ish bounding box + territories roughly
+      if (lat < 15 || lat > 72 || lon < -180 || lon > -60) continue;
+      const year = parts[3], mon = parts[4], day = parts[5], hr = parts[6], min = parts[7];
+      const t = `${year}-${mon}-${day} ${hr}:${min}`;
+      const wdir = parts[8] !== "MM" ? parts[8] : null;
+      const wspd = parts[9] !== "MM" ? parts[9] : null;
+      const gst = parts[10] !== "MM" ? parts[10] : null;
+      const wvht = parts[11] !== "MM" ? parts[11] : null;
+      const dpd = parts[12] !== "MM" ? parts[12] : null;
+      const pres = parts[15] !== "MM" ? parts[15] : null;
+      const atmp = parts[17] !== "MM" ? parts[17] : null;
+      const wtmp = parts[18] !== "MM" ? parts[18] : null;
+      buoyStations.push({
+        id, lat, lng: lon, type: "buoy", name: `NDBC ${id}`,
+        state: inferState(lat, lon) || "",
+        data: { t, wdir, wspd, gst, wvht, dpd, pres, atmp, wtmp }
+      });
+    }
+    const el = document.getElementById("buoyCount");
+    if (el) el.textContent = buoyStations.length;
+    console.log("Loaded", buoyStations.length, "NDBC buoys (US filter)");
+    renderBuoyMarkers();
+  } catch (e) {
+    console.warn("Buoy load failed", e);
+    const el = document.getElementById("buoyCount");
+    if (el) el.textContent = "err";
+  }
+}
+
+function renderBuoyMarkers() {
+  if (buoyLayer) { map.removeLayer(buoyLayer); buoyLayer = null; }
+  if (!showBuoys || !buoyStations.length) return;
+  const group = L.layerGroup();
+  buoyStations.forEach(b => {
+    const icon = L.divIcon({
+      className: "",
+      html: `<div style="width:11px;height:11px;border-radius:2px;background:#00cec9;border:1px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.5);"></div>`,
+      iconSize: [11, 11],
+      iconAnchor: [5, 5]
+    });
+    const m = L.marker([b.lat, b.lng], { icon });
+    let tip = `<strong>${b.name}</strong><br/>${b.id}`;
+    if (b.data.wspd) tip += `<br/>Wind ${b.data.wspd} m/s`;
+    if (b.data.wvht) tip += `<br/>Waves ${b.data.wvht} m`;
+    if (b.data.atmp) tip += `<br/>Air ${b.data.atmp}°C`;
+    if (b.data.wtmp) tip += `<br/>Water ${b.data.wtmp}°C`;
+    m.bindTooltip(tip, { direction: "top", offset: [0, -6] });
+    m.on("click", () => openBuoy(b));
+    group.addLayer(m);
+  });
+  group.addTo(map);
+  buoyLayer = group;
+}
+
+function openBuoy(b) {
+  // Reuse modal for buoy summary
+  selectedStation = { id: b.id, name: b.name, lat: b.lat, lng: b.lng, type: "buoy", state: b.state };
+  const modal = document.getElementById("stationModal");
+  modal.classList.remove("hidden");
+  document.getElementById("modalStationName").textContent = b.name;
+  document.getElementById("modalStationId").textContent = b.id;
+  document.getElementById("officialLink").href = `https://www.ndbc.noaa.gov/station_page.php?station=${b.id}`;
+  const meta = document.getElementById("modalMeta");
+  meta.innerHTML = `
+    <div class="meta-item"><div class="mlabel">LAT</div><div class="mval">${b.lat.toFixed(4)}</div></div>
+    <div class="meta-item"><div class="mlabel">LON</div><div class="mval">${b.lng.toFixed(4)}</div></div>
+    <div class="meta-item"><div class="mlabel">TYPE</div><div class="mval">NDBC BUOY</div></div>
+    <div class="meta-item"><div class="mlabel">STATE ~</div><div class="mval">${b.state || "—"}</div></div>
+  `;
+  const d = b.data;
+  const cards = [];
+  if (d.wspd) cards.push(`<div class="data-card"><div class="dlabel">WIND SPEED</div><div class="dval">${d.wspd}<span class="dunit">m/s</span></div><div class="dtime">${d.t}</div></div>`);
+  if (d.wdir) cards.push(`<div class="data-card"><div class="dlabel">WIND DIR</div><div class="dval">${d.wdir}<span class="dunit">°</span></div></div>`);
+  if (d.gst) cards.push(`<div class="data-card"><div class="dlabel">GUST</div><div class="dval">${d.gst}<span class="dunit">m/s</span></div></div>`);
+  if (d.wvht) cards.push(`<div class="data-card"><div class="dlabel">WAVE HEIGHT</div><div class="dval">${d.wvht}<span class="dunit">m</span></div></div>`);
+  if (d.dpd) cards.push(`<div class="data-card"><div class="dlabel">DOM PERIOD</div><div class="dval">${d.dpd}<span class="dunit">s</span></div></div>`);
+  if (d.pres) cards.push(`<div class="data-card"><div class="dlabel">PRESSURE</div><div class="dval">${d.pres}<span class="dunit">hPa</span></div></div>`);
+  if (d.atmp) cards.push(`<div class="data-card"><div class="dlabel">AIR TEMP</div><div class="dval">${d.atmp}<span class="dunit">°C</span></div></div>`);
+  if (d.wtmp) cards.push(`<div class="data-card"><div class="dlabel">WATER TEMP</div><div class="dval">${d.wtmp}<span class="dunit">°C</span></div></div>`);
+  document.getElementById("tabContent").innerHTML = cards.length ? `<div class="data-grid">${cards.join("")}</div>` : `<div class="loading">No recent buoy data</div>`;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelector('.tab[data-tab="latest"]')?.classList.add("active");
+}
+
+// ========== WATCH STRIP ==========
+function addToWatch(idOrName) {
+  const q = (idOrName || "").trim().toLowerCase();
+  if (!q) return;
+  let st = allStations.find(s => s.id.toLowerCase() === q || (s.name && s.name.toLowerCase().includes(q)));
+  if (!st) {
+    const b = buoyStations.find(x => x.id.toLowerCase() === q);
+    if (b) st = { id: b.id, name: b.name, type: "buoy", lat: b.lat, lng: b.lng };
+  }
+  if (!st) { showToast("Station / buoy not found"); return; }
+  if (watchedList.some(w => w.id === st.id)) { showToast("Already watching"); return; }
+  watchedList.push({ id: st.id, name: st.name, type: st.type || "waterlevels", data: null });
+  renderWatchSlots();
+  refreshAllWatches();
+  showToast(`Watching ${st.name}`);
+}
+
+function renderWatchSlots() {
+  const box = document.getElementById("watchSlots");
+  if (!box) return;
+  if (!watchedList.length) {
+    box.innerHTML = `<div class="watch-empty">Add a CO-OPS station or NDBC buoy ID above to monitor in realtime (updates every 2 min, SOL chime on change)</div>`;
+    return;
+  }
+  box.innerHTML = watchedList.map(w => {
+    const d = w.data;
+    let vals = "—";
+    if (d) {
+      if (w.type === "buoy") vals = `Wind ${d.wspd || "—"} m/s · Waves ${d.wvht || "—"} m`;
+      else vals = `${d.v != null ? d.v + " ft" : "—"}`;
+    }
+    return `<div class="watch-card" data-id="${w.id}">
+      <div class="wc-name">${w.name}</div>
+      <div class="wc-id">${w.id} · ${w.type}</div>
+      <div class="wc-vals">${vals}</div>
+      <div class="wc-time">${d?.t || ""}</div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".watch-card").forEach(card => {
+    card.onclick = () => {
+      const id = card.dataset.id;
+      const st = allStations.find(s => s.id === id) || buoyStations.find(b => b.id === id);
+      if (st) {
+        if (st.type === "buoy" || buoyStations.some(b => b.id === id)) openBuoy(st);
+        else openStation(st);
+      }
+    };
+  });
+}
+
+async function refreshAllWatches() {
+  if (!watchedList.length) return;
+  let anyChange = false;
+  for (const w of watchedList) {
+    if (w.type === "buoy") {
+      const b = buoyStations.find(x => x.id === w.id);
+      if (b) {
+        const prev = w.data ? JSON.stringify(w.data) : "";
+        w.data = b.data;
+        if (prev && prev !== JSON.stringify(w.data)) anyChange = true;
+      }
+    } else {
+      const d = await fetchLatest(w.id, "water_level");
+      if (d) {
+        const prev = w.data ? `${w.data.v}|${w.data.t}` : "";
+        const now = `${d.v}|${d.t}`;
+        if (prev && prev !== now) {
+          anyChange = true;
+          freshIds.add(w.id);
+        }
+        w.data = d;
+      }
+    }
+  }
+  renderWatchSlots();
+  if (anyChange) {
+    playSolChime();
+    renderMarkers(); // pulse fresh
+  }
+}
+
+// Extend bindUI for new controls (called after DOM ready already bound some)
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(() => {
+    const st = document.getElementById("soundToggle");
+    if (st) {
+      st.onclick = () => {
+        soundEnabled = !soundEnabled;
+        st.textContent = soundEnabled ? "🔊 SOUND ON" : "🔇 SOUND OFF";
+        st.classList.toggle("on", soundEnabled);
+        showToast(soundEnabled ? "SOL chime enabled" : "SOL chime muted");
+      };
+      st.classList.add("on");
+    }
+    const tb = document.getElementById("toggleBuoys");
+    if (tb) {
+      tb.onclick = () => {
+        showBuoys = !showBuoys;
+        tb.classList.toggle("active", showBuoys);
+        renderBuoyMarkers();
+        showToast(showBuoys ? "Buoys visible" : "Buoys hidden");
+      };
+    }
+    document.getElementById("addWatchBtn")?.addEventListener("click", () => {
+      addToWatch(document.getElementById("watchInput")?.value);
+      const inp = document.getElementById("watchInput");
+      if (inp) inp.value = "";
+    });
+    document.getElementById("watchInput")?.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        addToWatch(e.target.value);
+        e.target.value = "";
+      }
+    });
+    document.getElementById("clearWatchBtn")?.addEventListener("click", () => {
+      watchedList = [];
+      renderWatchSlots();
+    });
+  }, 500);
+});

@@ -31,12 +31,15 @@
           <span class="value" id="stationCount">--</span>
         </div>
         <div class="status-item">
-          <span class="label">ACTIVE</span>
-          <span class="value" id="activeCount">--</span>
+          <span class="label">BUOYS</span>
+          <span class="value" id="buoyCount">--</span>
         </div>
         <div class="status-item">
           <span class="label">UTC</span>
           <span class="value" id="utcClock">--:--:--</span>
+        </div>
+        <div class="status-item">
+          <button id="soundToggle" class="sound-btn" title="Toggle SOL chime">🔊 SOUND ON</button>
         </div>
         <div class="status-item live">
           <span class="pulse"></span>
@@ -114,6 +117,9 @@
             <li><span class="swatch met"></span> METEOROLOGICAL</li>
             <li><span class="swatch airgap"></span> AIR GAP</li>
             <li><span class="swatch curr"></span> CURRENTS</li>
+            <li><span class="swatch buoy"></span> NDBC BUOYS</li>
+            <li><span class="swatch pulse-demo"></span> FRESH DATA (PULSING)</li>
+            <li><span class="swatch waves"></span> WAVE HEIGHT / PERIOD</li>
           </ul>
         </section>
 
@@ -138,9 +144,10 @@
           <div class="coords" id="mapCoords">LAT -- LON --</div>
           <div class="zoom-level" id="zoomLevel">Z --</div>
         </div>
-        <div class="map-controls">
-          <button id="fitUSA" title="Fit USA">⌂</button>
-          <button id="toggleClusters" title="Toggle Clusters">◉</button>
+        <div class="map-controls-left">
+          <button id="fitUSA" title="Fit USA">⌂ USA</button>
+          <button id="toggleClusters" title="Toggle Clusters">◉ CLUSTERS</button>
+          <button id="toggleBuoys" title="Toggle Buoys" class="active">◎ BUOYS</button>
         </div>
       </section>
 
@@ -210,15 +217,20 @@
       </div>
     </div>
 
-    <!-- Watch Panel (single station realtime) -->
-    <div id="watchPanel" class="watch-panel hidden">
-      <div class="watch-header">
-        <span>WATCH // <span id="watchStationName">—</span></span>
-        <button id="clearWatch" title="Clear">×</button>
+    <!-- Bottom Watch Strip (under map) -->
+    <section id="watchStrip" class="watch-strip">
+      <div class="watch-strip-header">
+        <span class="sec-title">WATCH // REALTIME STATION</span>
+        <div class="watch-add">
+          <input type="text" id="watchInput" placeholder="Station ID or name..." />
+          <button id="addWatchBtn">ADD</button>
+          <button id="clearWatchBtn" title="Clear">CLEAR</button>
+        </div>
       </div>
-      <div id="watchContent" class="watch-content">—</div>
-      <div class="watch-footer">Updated <span id="watchUpdated">—</span> · every 2 min · SOL chime on change</div>
-    </div>
+      <div id="watchSlots" class="watch-slots">
+        <div class="watch-empty">Add a CO-OPS station or NDBC buoy ID above to monitor in realtime (updates every 2 min, SOL chime on change)</div>
+      </div>
+    </section>
 
     <!-- Toast -->
     <div id="toast" class="toast hidden"></div>
