@@ -1220,3 +1220,17 @@ html, body {
 }
 
 .swatch.tidepred { background: #a29bfe; }
+
+.tide-pred-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #a29bfe;
+  border: 2px solid #fff;
+  box-shadow: 0 0 6px rgba(162,155,254,0.8);
+  cursor: pointer;
+}
+.tide-pred-dot:hover {
+  background: #6c5ce7;
+  transform: scale(1.3);
+}

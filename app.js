@@ -28,7 +28,7 @@ let soundEnabled = true;
 let watchedList = [];           // array of {id, name, type, data}
 let buoyLayer = null;
 let tidePredStations = [];
-let showTidePred = false;
+let showTidePred = true;
 let tidePredLayer = null;
 let freshIds = new Set();       // stations with recent data updates (for pulse)
 
@@ -765,24 +765,96 @@ async function renderMet(station, container) {
 }
 
 async function renderCurrents(station, container) {
-  if (station.type !== "currents") {
-    container.innerHTML = `<div class="loading">Not a currents station. Select a PORTS current meter.</div>`;
-    return;
-  }
+  // Observed currents (PORTS meters) OR predicted currents if available
+  const isCurrentMeter = station.type === "currents";
+  container.innerHTML = `<div class="loading">LOADING CURRENTS OVER TIME...</div>`;
+
   try {
-    const url = `${DATAAPI}?date=latest&station=${station.id}&product=currents&bin=1&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.data && json.data[0]) {
-      const d = json.data[0];
-      container.innerHTML = `
-        <div class="data-grid">
-          <div class="data-card"><div class="dlabel">SPEED</div><div class="dval">${d.s ?? "—"}<span class="dunit">kn</span></div><div class="dtime">${d.t || ""}</div></div>
-          <div class="data-card"><div class="dlabel">DIRECTION</div><div class="dval">${d.d ?? "—"}<span class="dunit">°</span></div><div class="dtime">${d.t || ""}</div></div>
-        </div>`;
-    } else {
-      container.innerHTML = `<div class="loading">No current data returned</div>`;
+    const end = new Date();
+    const begin = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+    const fmt = (d) =>
+      `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+
+    let series = null;
+    let latest = null;
+
+    if (isCurrentMeter) {
+      // Observed currents last 24h
+      let url = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(end)}&station=${station.id}&product=currents&bin=1&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.data && json.data.length) {
+        series = json.data.map(d => ({ t: d.t, s: parseFloat(d.s), d: parseFloat(d.d) })).filter(x => !isNaN(x.s));
+        latest = json.data[json.data.length - 1];
+      }
     }
+
+    // Also try currents_predictions for stations that support it
+    if (!series || series.length < 2) {
+      try {
+        const url2 = `${DATAAPI}?begin_date=${fmt(begin)}&range=24&station=${station.id}&product=currents_predictions&time_zone=gmt&units=english&interval=h&format=json&application=tides-currents-xplr`;
+        const res2 = await fetch(url2);
+        const json2 = await res2.json();
+        const rows = json2.current_predictions || json2.predictions || json2.data;
+        if (rows && rows.length) {
+          series = rows.map(d => ({
+            t: d.t || d.Time,
+            s: parseFloat(d.s ?? d.Speed ?? d.Velocity_Major),
+            d: parseFloat(d.d ?? d.Direction)
+          })).filter(x => !isNaN(x.s));
+          if (!latest && series.length) latest = { s: series[series.length-1].s, d: series[series.length-1].d, t: series[series.length-1].t };
+        }
+      } catch (_) {}
+    }
+
+    if (!series || !series.length) {
+      container.innerHTML = `<div class="loading">No current observations or predictions available for this station.<br/>Try a PORTS current meter (teal markers) or a station with current predictions.</div>`;
+      return;
+    }
+
+    let cards = "";
+    if (latest) {
+      cards = `
+        <div class="data-grid" style="margin-bottom:12px">
+          <div class="data-card highlight"><div class="dlabel">SPEED</div><div class="dval">${latest.s ?? series[series.length-1].s}<span class="dunit">kn</span></div><div class="dtime">${latest.t || ""}</div></div>
+          <div class="data-card"><div class="dlabel">DIRECTION</div><div class="dval">${latest.d ?? series[series.length-1].d ?? "—"}<span class="dunit">°</span></div></div>
+          <div class="data-card"><div class="dlabel">POINTS</div><div class="dval">${series.length}</div><div class="dtime">last ~24h</div></div>
+        </div>`;
+    }
+
+    container.innerHTML = `
+      ${cards}
+      <div style="color:var(--text-dim);font-size:11px;margin-bottom:6px">CURRENT SPEED OVER TIME</div>
+      <div class="chart-wrap"><canvas id="currChart"></canvas></div>
+    `;
+
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+    const ctx = document.getElementById("currChart").getContext("2d");
+    chartInstance = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: series.map(x => x.t),
+        datasets: [{
+          label: "Speed (kn)",
+          data: series.map(x => x.s),
+          borderColor: "#00b894",
+          backgroundColor: "rgba(0,184,148,0.12)",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.25,
+          fill: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#5a6a7a", maxTicksLimit: 8, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+          y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" }, title: { display: true, text: "kn", color: "#5a6a7a" } }
+        }
+      }
+    });
   } catch (err) {
     container.innerHTML = `<div class="loading">Error: ${err.message}</div>`;
   }
@@ -913,6 +985,13 @@ async function applyOverlay(mode) {
     if (mode === "currents" && s.type === "currents") {
       const d = await fetchLatest(s.id, "currents");
       if (d) latestValues[s.id].currents = d.s;
+    }
+    if (mode === "predictions" || mode === "all") {
+      // ensure tide pred layer visible when overlay is predictions
+      showTidePred = true;
+      const tpBtn = document.getElementById("toggleTidePred");
+      if (tpBtn) tpBtn.classList.add("active");
+      renderTidePredMarkers();
     }
   }));
 
@@ -1355,6 +1434,7 @@ function softRefresh() {
   }
   // recolor markers if overlay active
   if (overlayMode !== "none") renderMarkers();
+  if (showTidePred) renderTidePredMarkers();
   showToast("Soft refresh complete — watches & selection kept");
 }
 
@@ -1390,8 +1470,11 @@ async function loadTidePredStations() {
     })).filter(s => s.lat && s.lng);
     console.log("Tide prediction stations:", tidePredStations.length);
     const el = document.getElementById("tidePredCount");
-    if (el) el.textContent = tidePredStations.length;
-    if (showTidePred) renderTidePredMarkers();
+    if (el) el.textContent = String(tidePredStations.length);
+    // Always try render if toggle on (default true)
+    renderTidePredMarkers();
+    const tpBtn = document.getElementById("toggleTidePred");
+    if (tpBtn) tpBtn.classList.toggle("active", showTidePred);
   } catch (e) {
     console.warn("Tide pred stations load failed", e);
   }
@@ -1399,31 +1482,33 @@ async function loadTidePredStations() {
 
 function renderTidePredMarkers() {
   if (tidePredLayer) { map.removeLayer(tidePredLayer); tidePredLayer = null; }
-  if (!showTidePred || !tidePredStations.length) return;
+  if (!showTidePred || !tidePredStations.length || !map) return;
 
-  // Limit density when zoomed out — show all when zoomed in
   const z = map.getZoom();
-  let list = tidePredStations;
-  if (z < 6) {
-    // subsample for performance
-    list = tidePredStations.filter((_, i) => i % 4 === 0);
-  }
+  // Progressive density
+  let step = 1;
+  if (z < 5) step = 8;
+  else if (z < 7) step = 3;
+  else if (z < 9) step = 2;
+  const list = step === 1 ? tidePredStations : tidePredStations.filter((_, i) => i % step === 0);
 
   const group = L.layerGroup();
   list.forEach(s => {
+    if (s.lat == null || s.lng == null) return;
     const icon = L.divIcon({
       className: "",
-      html: `<div style="width:10px;height:10px;border-radius:50%;background:#a29bfe;border:1.5px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.5);opacity:0.9;"></div>`,
-      iconSize: [10, 10],
-      iconAnchor: [5, 5]
+      html: `<div class="tide-pred-dot" title="${s.name}"></div>`,
+      iconSize: [12, 12],
+      iconAnchor: [6, 6]
     });
-    const m = L.marker([s.lat, s.lng], { icon });
+    const m = L.marker([s.lat, s.lng], { icon, interactive: true });
     m.bindTooltip(`<strong>${s.name}</strong><br/>${s.id} · ${s.state || ""} · TIDE PRED`, { direction: "top", offset: [0, -6] });
     m.on("click", () => openTidePred(s));
     group.addLayer(m);
   });
   group.addTo(map);
   tidePredLayer = group;
+  console.log("Rendered tide pred markers:", list.length, "of", tidePredStations.length);
 }
 
 async function openTidePred(s) {
