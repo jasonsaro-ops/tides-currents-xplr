@@ -145,9 +145,12 @@ function initMap() {
   map = L.map("map", {
     center: [39.0, -75.5], // Mid-Atlantic default bias
     zoom: 6,
-    zoomControl: true,
+    zoomControl: false,
     attributionControl: true
   });
+
+  // Zoom +/- top-right so they don't cover bottom/left data
+  L.control.zoom({ position: "topright" }).addTo(map);
 
   setBasemap("dark");
 
@@ -517,11 +520,18 @@ async function openStation(station) {
     <div class="meta-item"><div class="mlabel">TIDAL</div><div class="mval">${station.tidal ? "YES" : "NO"} · ${station.tideType || ""}</div></div>
   `;
 
-  // Watch button state
+  // Watch button — adds to bottom watch strip
   const watchBtn = document.getElementById("watchBtn");
   if (watchBtn) {
-    watchBtn.textContent = watchedStation?.id === station.id ? "★ WATCHING" : "☆ WATCH";
-    watchBtn.classList.toggle("active", watchedStation?.id === station.id);
+    const already = watchedList.some(w => w.id === station.id);
+    watchBtn.textContent = already ? "★ ON WATCH" : "☆ WATCH";
+    watchBtn.classList.toggle("active", already);
+    watchBtn.onclick = () => {
+      addToWatch(station.id);
+      watchBtn.textContent = "★ ON WATCH";
+      watchBtn.classList.add("active");
+      showToast(`Added ${station.name} to watch panel`);
+    };
   }
 
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -948,12 +958,14 @@ function bindUI() {
     if (e.key === "Enter") doSearch();
   });
 
-  document.getElementById("fitUSA").onclick = () => map.setView([39.5, -98.35], 4);
-  document.getElementById("toggleClusters").onclick = () => {
+  document.getElementById("fitUSA")?.addEventListener("click", () => map.setView([39.5, -98.35], 4));
+  document.getElementById("resetViewBtn")?.addEventListener("click", resetView);
+  document.getElementById("softRefreshBtn")?.addEventListener("click", softRefresh);
+  document.getElementById("toggleClusters")?.addEventListener("click", () => {
     useClusters = !useClusters;
     renderMarkers();
     showToast(useClusters ? "Clustering ON" : "Clustering OFF");
-  };
+  });
 
   document.getElementById("refreshActive").onclick = () => loadActivePanel(false);
 
@@ -963,7 +975,7 @@ function bindUI() {
 
   // Watch button (injected in modal footer area via HTML update)
   const watchBtn = document.getElementById("watchBtn");
-  if (watchBtn) watchBtn.onclick = toggleWatch;
+  /* watchBtn bound in openStation to addToWatch */
 
   document.getElementById("clearWatch")?.addEventListener("click", () => {
     watchedStation = null;
@@ -1307,4 +1319,33 @@ function populateWatchDropdowns() {
       // keep selection visible
     }
   };
+}
+
+
+// ========== SOFT REFRESH & RESET VIEW ==========
+function softRefresh() {
+  showToast("Soft refresh — fetching latest data...");
+  loadActivePanel(true);
+  refreshAllWatches();
+  if (showBuoys) loadBuoys();
+  if (selectedStation) {
+    const activeTab = document.querySelector(".tab.active");
+    if (activeTab) loadTab(activeTab.dataset.tab, true);
+  }
+  // recolor markers if overlay active
+  if (overlayMode !== "none") renderMarkers();
+  showToast("Soft refresh complete — watches & selection kept");
+}
+
+function resetView() {
+  map.setView([39.5, -98.35], 4);
+  document.getElementById("stateFilter").value = "";
+  document.getElementById("typeFilter").value = "";
+  document.getElementById("productFilter").value = "none";
+  overlayMode = "none";
+  document.getElementById("showWaterLevels").checked = true;
+  document.getElementById("showCurrents").checked = true;
+  document.getElementById("showPorts").checked = false;
+  applyFilters();
+  showToast("View reset — map & filters restored (watches kept)");
 }

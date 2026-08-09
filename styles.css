@@ -904,7 +904,7 @@ html, body {
 /* Map controls left (non-overlapping) */
 .map-controls-left {
   position: absolute;
-  top: 12px;
+  top: 80px; /* below Leaflet zoom (+/-) at topright */
   right: 12px;
   z-index: 500;
   display: flex;
@@ -1062,7 +1062,7 @@ html, body {
 /* Map controls left (non-overlapping) */
 .map-controls-left {
   position: absolute;
-  top: 12px;
+  top: 80px; /* below Leaflet zoom (+/-) at topright */
   right: 12px;
   z-index: 500;
   display: flex;
