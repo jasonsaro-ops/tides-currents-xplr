@@ -138,7 +138,17 @@
             <button class="bm-btn" data-bm="ocean">OCEAN</button>
           </div>
         </section>
-      </aside>
+      
+        <section class="panel-section warnings-section" id="warningsSection">
+          <div class="sec-title">NWS // COASTAL FLOOD ALERTS
+            <button id="refreshWarningsBtn" class="mini-btn" title="Refresh alerts">↻</button>
+          </div>
+          <div id="warningsCount" class="warnings-count">Loading…</div>
+          <div id="warningsList" class="warnings-list">
+            <div class="loading">Fetching active coastal flood alerts…</div>
+          </div>
+        </section>
+</aside>
 
       <!-- Center: Map -->
       <section class="map-container">
@@ -154,6 +164,7 @@
           <button id="toggleClusters" title="Toggle Clusters">◉ CLUSTERS</button>
           <button id="toggleBuoys" title="Toggle Buoys" class="active">◎ BUOYS</button>
           <button id="toggleTidePred" title="Tide prediction stations" class="active">◇ TIDE PRED</button>
+          <button id="toggleWarnings" title="NWS coastal flood alerts" class="active">⚠ WARNINGS</button>
         </div>
       </section>
 

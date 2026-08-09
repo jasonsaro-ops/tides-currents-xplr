@@ -30,6 +30,9 @@ let buoyLayer = null;
 let tidePredStations = [];
 let showTidePred = true;
 let tidePredLayer = null;
+let nwsAlerts = [];
+let nwsAlertLayer = null;
+let showWarnings = true;
 let freshIds = new Set();       // stations with recent data updates (for pulse)
 
 // Priority Mid-Atlantic stations (pinned top of Active)
@@ -65,12 +68,14 @@ const COASTAL_STATES = [
 
 // ========== INIT ==========
 document.addEventListener("DOMContentLoaded", async () => {
+  setInterval(() => { if (typeof loadNwsWarnings === 'function') loadNwsWarnings(); }, 5 * 60 * 1000);
   initClock();
   initMap();
   bindUI();
   await loadStations();
   await loadBuoys();
   await loadTidePredStations();
+  loadNwsWarnings();
   populateFilters();
   populateWatchDropdowns();
   renderMarkers();
@@ -1591,6 +1596,19 @@ document.addEventListener("DOMContentLoaded", () => {
     map?.on("zoomend", () => {
       if (showTidePred) renderTidePredMarkers();
     });
+    const tw = document.getElementById("toggleWarnings");
+    if (tw) {
+      tw.onclick = () => {
+        showWarnings = !showWarnings;
+        tw.classList.toggle("active", showWarnings);
+        renderNwsAlertPolygons();
+        showToast(showWarnings ? "NWS alert zones ON map" : "NWS alert zones hidden");
+      };
+    }
+    document.getElementById("refreshWarningsBtn")?.addEventListener("click", () => {
+      loadNwsWarnings();
+      showToast("Refreshing NWS coastal flood alerts…");
+    });
     document.getElementById("addWatchBtn")?.addEventListener("click", () => {
       const typed = document.getElementById("watchInput")?.value?.trim();
       const fromSel = document.getElementById("watchStationSelect")?.value;
@@ -1672,6 +1690,7 @@ function softRefresh() {
   // recolor markers if overlay active
   if (overlayMode !== "none") renderMarkers();
   if (showTidePred) renderTidePredMarkers();
+  loadNwsWarnings();
   showToast("Soft refresh complete — watches & selection kept");
 }
 
@@ -1951,4 +1970,176 @@ async function renderFlood(station, container) {
     </div>
     <div class="data-grid">${cards.join("")}</div>
   `;
+}
+
+
+// ========== NWS COASTAL FLOOD WARNINGS ==========
+async function loadNwsWarnings() {
+  const listEl = document.getElementById("warningsList");
+  const countEl = document.getElementById("warningsCount");
+  try {
+    const events = [
+      "Coastal Flood Warning",
+      "Coastal Flood Watch",
+      "Coastal Flood Advisory",
+      "Coastal Flood Statement"
+    ].map(e => encodeURIComponent(e)).join(",");
+    const url = `https://api.weather.gov/alerts/active?event=${events}`;
+    const res = await fetch(url, {
+      headers: {
+        "Accept": "application/geo+json",
+        "User-Agent": "TIDES-CURRENTS-XPLR (github.io dashboard)"
+      }
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const json = await res.json();
+    nwsAlerts = (json.features || []).map(f => {
+      const p = f.properties || {};
+      return {
+        id: p.id || f.id,
+        event: p.event,
+        severity: (p.severity || "Unknown").toLowerCase(),
+        urgency: p.urgency,
+        headline: p.headline,
+        description: p.description,
+        instruction: p.instruction,
+        areaDesc: p.areaDesc,
+        senderName: p.senderName,
+        sent: p.sent,
+        effective: p.effective,
+        expires: p.expires,
+        ends: p.ends,
+        geometry: f.geometry,
+        url: p["@id"] || (p.id ? `https://api.weather.gov/alerts/${encodeURIComponent(p.id)}` : null)
+      };
+    });
+    // Sort: Warning > Watch > Advisory > Statement
+    const rank = { warning: 0, watch: 1, advisory: 2, statement: 3 };
+    nwsAlerts.sort((a, b) => {
+      const ra = rank[(a.event || "").toLowerCase().split(" ").pop()] ?? 9;
+      const rb = rank[(b.event || "").toLowerCase().split(" ").pop()] ?? 9;
+      return ra - rb;
+    });
+
+    if (countEl) {
+      countEl.textContent = nwsAlerts.length
+        ? `${nwsAlerts.length} ACTIVE · ${new Date().toISOString().substr(11, 8)} UTC`
+        : "No active coastal flood alerts";
+    }
+    renderWarningsList();
+    renderNwsAlertPolygons();
+  } catch (e) {
+    console.warn("NWS alerts failed", e);
+    if (countEl) countEl.textContent = "Alerts unavailable";
+    if (listEl) listEl.innerHTML = `<div class="loading">Could not load NWS alerts: ${e.message}</div>`;
+  }
+}
+
+function renderWarningsList() {
+  const listEl = document.getElementById("warningsList");
+  if (!listEl) return;
+  if (!nwsAlerts.length) {
+    listEl.innerHTML = `<div class="loading">No active Coastal Flood Warning / Watch / Advisory / Statement</div>`;
+    return;
+  }
+  listEl.innerHTML = nwsAlerts.map((a, i) => {
+    const exp = a.expires ? new Date(a.expires).toLocaleString() : "—";
+    return `<div class="warning-card severity-${a.severity}" data-idx="${i}">
+      <div class="w-event">${a.event || "ALERT"} · ${a.severity.toUpperCase()}</div>
+      <div class="w-area">${a.areaDesc || "—"}</div>
+      <div class="w-headline">${a.headline || ""}</div>
+      <div class="w-meta">${a.senderName || ""} · Exp ${exp}</div>
+    </div>`;
+  }).join("");
+
+  listEl.querySelectorAll(".warning-card").forEach(card => {
+    card.onclick = () => {
+      const a = nwsAlerts[parseInt(card.dataset.idx, 10)];
+      if (!a) return;
+      focusNwsAlert(a);
+    };
+  });
+}
+
+function renderNwsAlertPolygons() {
+  if (nwsAlertLayer) {
+    map.removeLayer(nwsAlertLayer);
+    nwsAlertLayer = null;
+  }
+  if (!showWarnings || !map || !nwsAlerts.length) return;
+
+  const group = L.layerGroup();
+  const colors = {
+    warning: "#c0392b",
+    watch: "#e74c3c",
+    advisory: "#e67e22",
+    statement: "#f1c40f"
+  };
+
+  nwsAlerts.forEach((a, i) => {
+    if (!a.geometry) return;
+    const key = (a.event || "").toLowerCase();
+    let color = "#e67e22";
+    if (key.includes("warning")) color = colors.warning;
+    else if (key.includes("watch")) color = colors.watch;
+    else if (key.includes("advisory")) color = colors.advisory;
+    else if (key.includes("statement")) color = colors.statement;
+
+    try {
+      const layer = L.geoJSON(a.geometry, {
+        style: {
+          color,
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 0.18,
+          opacity: 0.85
+        },
+        onEachFeature: (feat, lyr) => {
+          lyr.bindTooltip(
+            `<strong>${a.event}</strong><br/>${(a.areaDesc || "").slice(0, 80)}`,
+            { sticky: true }
+          );
+          lyr.on("click", () => focusNwsAlert(a));
+        }
+      });
+      group.addLayer(layer);
+    } catch (e) {
+      console.warn("alert geometry", e);
+    }
+  });
+
+  group.addTo(map);
+  nwsAlertLayer = group;
+}
+
+function focusNwsAlert(a) {
+  // Zoom to geometry if present
+  if (a.geometry && nwsAlertLayer) {
+    try {
+      const tmp = L.geoJSON(a.geometry);
+      map.fitBounds(tmp.getBounds().pad(0.15));
+    } catch (_) {}
+  }
+  // Show detail modal-like content in toast + optional expanded panel
+  const short = (a.description || a.headline || "").slice(0, 280);
+  showToast(`${a.event}: ${(a.areaDesc || "").split(";")[0]}`);
+  // Open a simple detail in the warnings list highlight is enough; also push to modal if desired
+  const listEl = document.getElementById("warningsList");
+  if (listEl) {
+    // Expand selected card description temporarily
+    const existing = document.getElementById("warningDetail");
+    if (existing) existing.remove();
+    const detail = document.createElement("div");
+    detail.id = "warningDetail";
+    detail.className = "warning-card";
+    detail.style.borderColor = "var(--orange)";
+    detail.innerHTML = `
+      <div class="w-event">${a.event} DETAIL</div>
+      <div class="w-area">${a.areaDesc || ""}</div>
+      <div class="w-headline" style="-webkit-line-clamp:unset;display:block;max-height:180px;overflow:auto;white-space:pre-wrap">${(a.description || "").slice(0, 1200)}</div>
+      ${a.instruction ? `<div class="w-meta" style="color:var(--orange);margin-top:6px">${a.instruction.slice(0, 400)}</div>` : ""}
+      <div class="w-meta">${a.senderName || ""} · <a href="https://www.weather.gov" target="_blank" style="color:var(--orange)">weather.gov</a></div>
+    `;
+    listEl.prepend(detail);
+  }
 }
