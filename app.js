@@ -564,6 +564,7 @@ async function loadTab(tab, quiet = false) {
     else if (tab === "currents") await renderCurrents(s, content);
     else if (tab === "predictions") await renderPredictions(s, content);
     else if (tab === "datums") await renderDatums(s, content);
+    else if (tab === "flood") await renderFlood(s, content);
   } catch (err) {
     console.error(err);
     content.innerHTML = `<div class="loading">Error: ${err.message}</div>`;
@@ -701,7 +702,7 @@ async function renderTimeSeries(station, container, product, title) {
     data: {
       labels,
       datasets: [{
-        label: title,
+        label: (station?.name ? station.name + " — " : "") + title,
         data: values,
         borderColor: "#e67e22",
         backgroundColor: "rgba(230,126,34,0.12)",
@@ -835,7 +836,7 @@ async function renderCurrents(station, container) {
       data: {
         labels: series.map(x => x.t),
         datasets: [{
-          label: "Speed (kn)",
+          label: (station?.name ? station.name + " — " : "") + "Speed (kn)",
           data: series.map(x => x.s),
           borderColor: "#00b894",
           backgroundColor: "rgba(0,184,148,0.12)",
@@ -1268,6 +1269,7 @@ function renderWatchSlots() {
     const exp = w.expanded ? "expanded" : "";
     let vals = "—";
     let more = "";
+    let floodHtml = "";
     if (w.type === "buoy") {
       vals = `Wind ${d.wspd || "—"} m/s · Waves ${d.wvht || "—"} m`;
       more = `Air ${d.atmp || "—"}°C · Water ${d.wtmp || "—"}°C · ${d.pres || "—"} hPa`;
@@ -1284,6 +1286,17 @@ function renderWatchSlots() {
           e.nextTide ? `Next ${e.nextTide}` : null
         ].filter(Boolean).join(" · ");
       }
+      if (w.flood) {
+        floodHtml = `<div class="flood-badge ${w.flood.level}">${w.flood.label}</div>`;
+        if (w.floodLevels) {
+          const fl = w.floodLevels;
+          const parts = [];
+          if (fl.nws_minor != null) parts.push(`Min ${Number(fl.nws_minor).toFixed(1)}`);
+          if (fl.nws_moderate != null) parts.push(`Mod ${Number(fl.nws_moderate).toFixed(1)}`);
+          if (fl.nws_major != null) parts.push(`Maj ${Number(fl.nws_major).toFixed(1)}`);
+          if (parts.length) floodHtml += `<div class="flood-thresholds">Thresholds ft: ${parts.join(" · ")}</div>`;
+        }
+      }
     }
     const chartId = `watchChart_${w.id.replace(/[^a-zA-Z0-9]/g, "")}`;
     return `<div class="watch-card ${exp}" data-id="${w.id}" data-idx="${i}">
@@ -1292,6 +1305,7 @@ function renderWatchSlots() {
       <div class="wc-vals">${vals}</div>
       ${more ? `<div class="wc-more">${more}</div>` : ""}
       <div class="wc-time">${d.t || w.updated || ""}</div>
+      ${floodHtml}
       ${w.expanded ? `<div class="wc-chart"><canvas id="${chartId}"></canvas></div>
         <div class="wc-actions">
           <button data-act="modal">OPEN FULL</button>
@@ -1452,9 +1466,9 @@ async function drawWatchChart(w) {
         legend: { display: true, labels: { color: "#8b9aab", font: { size: 10 } } },
         title: {
           display: true,
-          text: hilo.length ? `Next tides: ${hilo.slice(0,4).map(p => `${p.type} ${p.v}ft @ ${p.t}`).join(" · ")}` : "Tide curve",
-          color: "#8b9aab",
-          font: { size: 10 }
+          text: (w.name ? w.name + " — " : "") + (hilo.length ? `Next: ${hilo.slice(0,3).map(p => `${p.type} ${p.v}ft`).join(" · ")}` : "Tide curve (NOAA)"),
+          color: "#e8ecef",
+          font: { size: 11 }
         }
       },
       scales: {
@@ -1522,6 +1536,14 @@ async function refreshAllWatches() {
           const p = json.predictions[0];
           extra.nextTide = `${p.type} ${p.v}ft ${p.t}`;
           w.hilo = json.predictions;
+        }
+      } catch (_) {}
+      // Flood risk
+      try {
+        const fl = await fetchFloodLevels(w.id);
+        w.floodLevels = fl;
+        if (fl && w.data?.v != null) {
+          w.flood = floodStatus(w.data.v, fl);
         }
       } catch (_) {}
       w.extra = extra;
@@ -1802,7 +1824,7 @@ async function openTidePred(s) {
           data: {
             labels: labs,
             datasets: [{
-              label: "Predicted tide (ft MLLW)",
+              label: (s.name || s.id) + " — Predicted tide (ft MLLW)",
               data: vals,
               borderColor: "#a29bfe",
               backgroundColor: "rgba(162,155,254,0.15)",
@@ -1848,4 +1870,85 @@ async function openTidePred(s) {
       watchBtn.classList.add("active");
     };
   }
+}
+
+
+// ========== COASTAL FLOOD RISK ==========
+async function fetchFloodLevels(stationId) {
+  try {
+    const res = await fetch(`${MDAPI}/stations/${stationId}/floodlevels.json?units=english`);
+    const json = await res.json();
+    if (json.error) return null;
+    return {
+      nos_minor: json.nos_minor,
+      nos_moderate: json.nos_moderate,
+      nos_major: json.nos_major,
+      nws_minor: json.nws_minor,
+      nws_moderate: json.nws_moderate,
+      nws_major: json.nws_major,
+      action: json.action
+    };
+  } catch {
+    return null;
+  }
+}
+
+function floodStatus(wl, fl) {
+  if (wl == null || !fl) return { level: "unknown", label: "NO THRESHOLD DATA" };
+  const v = parseFloat(wl);
+  // Prefer NWS if available, else NOS
+  const major = fl.nws_major ?? fl.nos_major;
+  const moderate = fl.nws_moderate ?? fl.nos_moderate;
+  const minor = fl.nws_minor ?? fl.nos_minor;
+  const action = fl.action;
+  if (major != null && v >= major) return { level: "major", label: "MAJOR FLOOD" };
+  if (moderate != null && v >= moderate) return { level: "moderate", label: "MODERATE FLOOD" };
+  if (minor != null && v >= minor) return { level: "minor", label: "MINOR FLOOD" };
+  if (action != null && v >= action) return { level: "action", label: "ACTION STAGE" };
+  return { level: "ok", label: "BELOW FLOOD" };
+}
+
+async function renderFlood(station, container) {
+  container.innerHTML = `<div class="loading">LOADING FLOOD THRESHOLDS...</div>`;
+  const fl = await fetchFloodLevels(station.id);
+  const wlData = await fetchLatest(station.id, "water_level");
+  const wl = wlData?.v != null ? parseFloat(wlData.v) : null;
+  const status = floodStatus(wl, fl);
+
+  if (!fl) {
+    container.innerHTML = `<div class="loading">No coastal flood threshold data for this station.<br/>
+      <a href="https://tidesandcurrents.noaa.gov/inundationdb/" target="_blank" style="color:var(--orange)">Coastal Inundation Dashboard ↗</a></div>`;
+    return;
+  }
+
+  const cards = [];
+  if (wl != null) {
+    cards.push(`<div class="data-card highlight"><div class="dlabel">CURRENT WATER LEVEL</div><div class="dval">${wl.toFixed(2)}<span class="dunit">ft MLLW</span></div><div class="dtime">${wlData?.t || ""}</div></div>`);
+  }
+  cards.push(`<div class="data-card"><div class="dlabel">FLOOD STATUS</div><div class="dval"><span class="flood-badge ${status.level}">${status.label}</span></div></div>`);
+
+  const thresh = [
+    ["ACTION", fl.action],
+    ["NWS MINOR", fl.nws_minor],
+    ["NWS MODERATE", fl.nws_moderate],
+    ["NWS MAJOR", fl.nws_major],
+    ["NOS MINOR", fl.nos_minor],
+    ["NOS MODERATE", fl.nos_moderate],
+    ["NOS MAJOR", fl.nos_major]
+  ];
+  thresh.forEach(([lab, val]) => {
+    if (val != null) {
+      const above = wl != null && wl >= val;
+      cards.push(`<div class="data-card"><div class="dlabel">${lab}</div><div class="dval">${Number(val).toFixed(2)}<span class="dunit">ft</span></div><div class="dtime">${above ? "▲ EXCEEDED" : "below"}</div></div>`);
+    }
+  });
+
+  container.innerHTML = `
+    <div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">
+      Coastal flood thresholds (NOAA CO-OPS) · 
+      <a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${station.id}" target="_blank" style="color:var(--orange)">Station page ↗</a> · 
+      <a href="https://tidesandcurrents.noaa.gov/inundationdb/" target="_blank" style="color:var(--orange)">Inundation Dashboard ↗</a>
+    </div>
+    <div class="data-grid">${cards.join("")}</div>
+  `;
 }
