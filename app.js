@@ -72,6 +72,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initClock();
   initMap();
   bindUI();
+  if (typeof bindNowcoastUI === 'function') bindNowcoastUI();
   await loadStations();
   await loadBuoys();
   await loadTidePredStations();
@@ -2113,33 +2114,211 @@ function renderNwsAlertPolygons() {
 }
 
 function focusNwsAlert(a) {
+  if (!a) return;
   // Zoom to geometry if present
-  if (a.geometry && nwsAlertLayer) {
+  if (a.geometry) {
     try {
       const tmp = L.geoJSON(a.geometry);
-      map.fitBounds(tmp.getBounds().pad(0.15));
+      map.fitBounds(tmp.getBounds().pad(0.2));
     } catch (_) {}
   }
-  // Show detail modal-like content in toast + optional expanded panel
-  const short = (a.description || a.headline || "").slice(0, 280);
+  // Floating window
+  const modal = document.getElementById("alertModal");
+  if (!modal) return;
+  document.getElementById("alertModalEvent").textContent = a.event || "NWS ALERT";
+  document.getElementById("alertModalSeverity").textContent =
+    `${(a.severity || "").toUpperCase()} · ${(a.urgency || "")} · ${a.senderName || ""}`;
+  document.getElementById("alertModalArea").textContent = a.areaDesc || "";
+  document.getElementById("alertModalHeadline").textContent = a.headline || "";
+  document.getElementById("alertModalDesc").textContent = a.description || "No description available.";
+  document.getElementById("alertModalInstr").textContent = a.instruction || "";
+  const exp = a.expires ? new Date(a.expires).toLocaleString() : "—";
+  const eff = a.effective ? new Date(a.effective).toLocaleString() : "—";
+  document.getElementById("alertModalMeta").innerHTML =
+    `Effective ${eff} · Expires ${exp}<br/><a href="https://www.weather.gov" target="_blank" style="color:var(--orange)">weather.gov</a>`;
+  modal.classList.remove("hidden");
   showToast(`${a.event}: ${(a.areaDesc || "").split(";")[0]}`);
-  // Open a simple detail in the warnings list highlight is enough; also push to modal if desired
-  const listEl = document.getElementById("warningsList");
-  if (listEl) {
-    // Expand selected card description temporarily
-    const existing = document.getElementById("warningDetail");
-    if (existing) existing.remove();
-    const detail = document.createElement("div");
-    detail.id = "warningDetail";
-    detail.className = "warning-card";
-    detail.style.borderColor = "var(--orange)";
-    detail.innerHTML = `
-      <div class="w-event">${a.event} DETAIL</div>
-      <div class="w-area">${a.areaDesc || ""}</div>
-      <div class="w-headline" style="-webkit-line-clamp:unset;display:block;max-height:180px;overflow:auto;white-space:pre-wrap">${(a.description || "").slice(0, 1200)}</div>
-      ${a.instruction ? `<div class="w-meta" style="color:var(--orange);margin-top:6px">${a.instruction.slice(0, 400)}</div>` : ""}
-      <div class="w-meta">${a.senderName || ""} · <a href="https://www.weather.gov" target="_blank" style="color:var(--orange)">weather.gov</a></div>
-    `;
-    listEl.prepend(detail);
+}
+
+function closeAlertModal() {
+  document.getElementById("alertModal")?.classList.add("hidden");
+}
+
+
+// ========== nowCOAST-STYLE OVERLAY LAYERS ==========
+const ncLayerState = {};
+let rainViewerHost = "https://tilecache.rainviewer.com";
+let rainViewerRadarPath = null;
+let rainViewerSatPath = null;
+let tropicalLayer = null;
+let zoneForecastLayer = null;
+
+const NC_LAYER_DEFS = {
+  radar: { name: "Weather Radar" },
+  satellite: { name: "Weather Satellite" },
+  tropical: { name: "Tropical Cyclones" },
+  alerts: { name: "Active Alerts" },
+  zoneForecast: { name: "Zone Weather Forecasts" },
+  s100: { name: "S-100 Product Coverages" },
+  bluetopo: { name: "BlueTopo" },
+  waterlevels: { name: "Water Levels" }
+};
+
+async function initRainViewer() {
+  try {
+    const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+    const data = await res.json();
+    rainViewerHost = data.host || rainViewerHost;
+    const past = data.radar?.past || [];
+    if (past.length) rainViewerRadarPath = past[past.length - 1].path;
+    const sat = data.satellite?.infrared || data.satellite?.past || [];
+    if (sat.length) rainViewerSatPath = sat[sat.length - 1].path;
+  } catch (e) {
+    console.warn("RainViewer init failed", e);
   }
+}
+
+function setNcOpacity(pct) {
+  const o = (pct || 70) / 100;
+  Object.values(ncLayerState).forEach(lyr => {
+    if (lyr && lyr.setOpacity) lyr.setOpacity(o);
+  });
+}
+
+function toggleNcLayer(key, on) {
+  if (key === "alerts") {
+    showWarnings = on;
+    document.getElementById("toggleWarnings")?.classList.toggle("active", on);
+    renderNwsAlertPolygons();
+    return;
+  }
+  if (key === "radar") {
+    if (ncLayerState.radar) { map.removeLayer(ncLayerState.radar); ncLayerState.radar = null; }
+    if (on && rainViewerRadarPath) {
+      const url = `${rainViewerHost}${rainViewerRadarPath}/256/{z}/{x}/{y}/2/1_1.png`;
+      ncLayerState.radar = L.tileLayer(url, { opacity: 0.7, zIndex: 350, attribution: "Radar © RainViewer / NEXRAD" });
+      ncLayerState.radar.addTo(map);
+    } else if (on) {
+      showToast("Radar tiles loading…");
+      initRainViewer().then(() => toggleNcLayer("radar", true));
+    }
+    return;
+  }
+  if (key === "satellite") {
+    if (ncLayerState.satellite) { map.removeLayer(ncLayerState.satellite); ncLayerState.satellite = null; }
+    if (on) {
+      // RainViewer infrared if available; else NOAA GOES via tile proxy pattern
+      if (rainViewerSatPath) {
+        const url = `${rainViewerHost}${rainViewerSatPath}/256/{z}/{x}/{y}/0/0_0.png`;
+        ncLayerState.satellite = L.tileLayer(url, { opacity: 0.65, zIndex: 340, attribution: "Satellite © RainViewer" });
+      } else {
+        // Fallback: NASA GIBS GOES-East GeoColor (works CORS)
+        ncLayerState.satellite = L.tileLayer(
+          "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg",
+          { opacity: 0.6, zIndex: 340, maxZoom: 9, attribution: "GOES © NASA GIBS / NOAA" }
+        );
+      }
+      ncLayerState.satellite.addTo(map);
+    }
+    return;
+  }
+  if (key === "tropical") {
+    if (tropicalLayer) { map.removeLayer(tropicalLayer); tropicalLayer = null; ncLayerState.tropical = null; }
+    if (on) loadTropicalCyclones();
+    return;
+  }
+  if (key === "zoneForecast") {
+    if (zoneForecastLayer) { map.removeLayer(zoneForecastLayer); zoneForecastLayer = null; ncLayerState.zoneForecast = null; }
+    if (on) {
+      // NWS public forecast zones sample via weather.gov API zones - use coastal marine as proxy outline
+      // Practical: open nowCOAST embed focused; also try Iowa State NWS zones tiles if available
+      showToast("Zone forecasts: use EMBED nowCOAST for full NWS zone forecast layers");
+      // Lightweight: link layer using weather.gov coastal zones geojson is heavy; use iframe embed suggestion
+    }
+    return;
+  }
+  if (key === "s100" || key === "bluetopo" || key === "waterlevels") {
+    if (on) {
+      showToast(`${NC_LAYER_DEFS[key].name}: opening nowCOAST viewer (full layer catalog)`);
+      openNowcoastEmbed();
+    }
+    return;
+  }
+}
+
+async function loadTropicalCyclones() {
+  try {
+    const res = await fetch("https://www.nhc.noaa.gov/CurrentStorms.json");
+    const data = await res.json();
+    const storms = data.activeStorms || [];
+    const group = L.layerGroup();
+    if (!storms.length) {
+      showToast("No active tropical cyclones (NHC)");
+      // still show NHC basin links as markers optional
+      tropicalLayer = group;
+      ncLayerState.tropical = group;
+      group.addTo(map);
+      return;
+    }
+    storms.forEach(s => {
+      const lat = parseFloat(s.latitude || s.lat);
+      const lon = parseFloat(s.longitude || s.lon);
+      if (isNaN(lat) || isNaN(lon)) return;
+      const icon = L.divIcon({
+        className: "",
+        html: `<div style="background:#e74c3c;color:#fff;border:2px solid #fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 0 8px #e74c3c;">🌀</div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+      const m = L.marker([lat, lon], { icon });
+      m.bindPopup(`<strong>${s.name || s.id || "Storm"}</strong><br/>${s.classification || ""} ${s.intensity || ""}<br/><a href="https://www.nhc.noaa.gov/" target="_blank">NHC</a>`);
+      group.addLayer(m);
+    });
+    tropicalLayer = group;
+    ncLayerState.tropical = group;
+    group.addTo(map);
+    showToast(`${storms.length} tropical cyclone(s) plotted`);
+  } catch (e) {
+    console.warn(e);
+    showToast("Tropical cyclone data unavailable");
+  }
+}
+
+function openNowcoastEmbed() {
+  const el = document.getElementById("nowcoastEmbed");
+  const frame = document.getElementById("nowcoastFrame");
+  if (!el || !frame) return;
+  // Center USA view on nowCOAST
+  frame.src = "https://nowcoast.noaa.gov/";
+  el.classList.remove("hidden");
+}
+
+function closeNowcoastEmbed() {
+  const el = document.getElementById("nowcoastEmbed");
+  const frame = document.getElementById("nowcoastFrame");
+  if (frame) frame.src = "about:blank";
+  el?.classList.add("hidden");
+  el?.classList.remove("semi");
+}
+
+function bindNowcoastUI() {
+  document.querySelectorAll("#nowcoastLayers input[data-nc]").forEach(cb => {
+    cb.addEventListener("change", () => toggleNcLayer(cb.dataset.nc, cb.checked));
+  });
+  document.getElementById("ncOpacity")?.addEventListener("input", (e) => {
+    setNcOpacity(parseInt(e.target.value, 10));
+  });
+  document.getElementById("openNowcoastEmbed")?.addEventListener("click", openNowcoastEmbed);
+  document.getElementById("closeNowcoastEmbed")?.addEventListener("click", closeNowcoastEmbed);
+  document.getElementById("nowcoastOpacityToggle")?.addEventListener("click", () => {
+    document.getElementById("nowcoastEmbed")?.classList.toggle("semi");
+  });
+  document.getElementById("closeAlertModal")?.addEventListener("click", closeAlertModal);
+  document.getElementById("alertModal")?.addEventListener("click", (e) => {
+    if (e.target.id === "alertModal") closeAlertModal();
+  });
+  // Sync alerts checkbox with showWarnings
+  const alertsCb = document.querySelector('#nowcoastLayers input[data-nc="alerts"]');
+  if (alertsCb) alertsCb.checked = showWarnings;
+  initRainViewer();
 }

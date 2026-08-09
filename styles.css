@@ -1378,3 +1378,131 @@ html, body {
 .leaflet-interactive.nws-alert-poly {
   cursor: pointer;
 }
+
+.alert-modal-panel {
+  max-width: 560px;
+  max-height: 80vh;
+}
+.alert-area {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.alert-headline {
+  font-size: 12px;
+  color: var(--orange);
+  margin-bottom: 10px;
+}
+.alert-desc {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow-y: auto;
+  background: #0a0d12;
+  padding: 10px;
+  border: 1px solid var(--panel-border);
+  line-height: 1.45;
+}
+.alert-instr {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #f1c40f;
+  line-height: 1.4;
+}
+.alert-meta {
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.nowcoast-section .nc-layer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 0;
+  cursor: pointer;
+}
+.nowcoast-section .nc-layer input {
+  accent-color: var(--orange);
+}
+.nc-opacity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.nc-opacity input[type="range"] {
+  flex: 1;
+  accent-color: var(--orange);
+}
+.nc-embed-btn {
+  margin-top: 10px;
+  width: 100%;
+  background: #0a0d12;
+  border: 1px solid var(--panel-border);
+  color: var(--orange);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 8px;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+.nc-embed-btn:hover {
+  border-color: var(--orange);
+  background: rgba(230,126,34,0.1);
+}
+
+.nowcoast-embed {
+  position: fixed;
+  inset: 48px 12px 12px 12px;
+  z-index: 9000;
+  background: #0a0d12;
+  border: 1px solid var(--orange);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 40px rgba(0,0,0,0.7);
+}
+.nowcoast-embed.hidden { display: none; }
+.nowcoast-embed.semi {
+  opacity: 0.92;
+  inset: 20% 10% 10% 20%;
+}
+.nowcoast-embed-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--orange);
+  letter-spacing: 1px;
+}
+.nowcoast-embed-bar button {
+  background: #0a0d12;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+.nowcoast-embed-bar button:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+.nowcoast-embed iframe {
+  flex: 1;
+  border: none;
+  width: 100%;
+  background: #000;
+}

@@ -148,6 +148,27 @@
             <div class="loading">Fetching active coastal flood alerts…</div>
           </div>
         </section>
+
+        <section class="panel-section nowcoast-section">
+          <div class="sec-title">nowCOAST // MAP LAYERS
+            <a href="https://nowcoast.noaa.gov/" target="_blank" class="mini-btn" title="Open nowCOAST">↗</a>
+          </div>
+          <div class="nowcoast-layers" id="nowcoastLayers">
+            <label class="nc-layer"><input type="checkbox" data-nc="radar" /> Weather Radar</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="satellite" /> Weather Satellite</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="tropical" /> Tropical Cyclones</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="alerts" checked /> Active Alerts (NWS)</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="zoneForecast" /> Zone Weather Forecasts</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="s100" /> S-100 Product Coverages</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="bluetopo" /> BlueTopo</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="waterlevels" /> Water Levels (nowCOAST)</label>
+          </div>
+          <div class="nc-opacity">
+            <span>LAYER OPACITY</span>
+            <input type="range" id="ncOpacity" min="20" max="100" value="70" />
+          </div>
+          <button id="openNowcoastEmbed" class="nc-embed-btn">EMBED nowCOAST VIEWER</button>
+        </section>
 </aside>
 
       <!-- Center: Map -->
@@ -200,7 +221,38 @@
     </main>
 
     <!-- Floating Station Window -->
-    <div id="stationModal" class="modal hidden">
+    <!-- NWS Alert floating window -->
+    <div id="nowcoastEmbed" class="nowcoast-embed hidden">
+    <div class="nowcoast-embed-bar">
+      <span>nowCOAST // NOAA</span>
+      <div>
+        <button id="nowcoastOpacityToggle">SEMI</button>
+        <button id="closeNowcoastEmbed">× CLOSE</button>
+      </div>
+    </div>
+    <iframe id="nowcoastFrame" src="about:blank" title="nowCOAST" allowfullscreen></iframe>
+  </div>
+
+  <div id="alertModal" class="modal hidden">
+    <div class="modal-panel alert-modal-panel">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="alertModalEvent">ALERT</div>
+          <div class="modal-sub" id="alertModalSeverity"></div>
+        </div>
+        <button class="modal-close" id="closeAlertModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="alertModalArea" class="alert-area"></div>
+        <div id="alertModalHeadline" class="alert-headline"></div>
+        <pre id="alertModalDesc" class="alert-desc"></pre>
+        <div id="alertModalInstr" class="alert-instr"></div>
+        <div id="alertModalMeta" class="alert-meta"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="stationModal" class="modal hidden">
       <div class="modal-content">
         <div class="modal-header">
           <div class="modal-title">
