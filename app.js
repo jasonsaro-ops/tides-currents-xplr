@@ -68,6 +68,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadStations();
   await loadBuoys();
   populateFilters();
+  populateWatchDropdowns();
   renderMarkers();
   loadActivePanel();
   // Realtime refresh every 2 minutes
@@ -217,8 +218,10 @@ async function loadStations() {
 
     allStations = [...waterStations, ...currentStations];
 
-    document.getElementById("stationCount").textContent = allStations.length;
-    document.getElementById("activeCount").textContent = allStations.filter((s) => s.isPorts).length;
+    const sc = document.getElementById("stationCount");
+    if (sc) sc.textContent = allStations.length;
+    const bc = document.getElementById("buoyCount");
+    // buoy count set later by loadBuoys
     showToast(`Loaded ${waterStations.length} water + ${currentStations.length} current stations`);
   } catch (err) {
     console.error(err);
@@ -829,7 +832,7 @@ function toggleWatch() {
   if (!selectedStation) return;
   if (watchedStation?.id === selectedStation.id) {
     watchedStation = null;
-    document.getElementById("watchPanel").classList.add("hidden");
+    document.getElementById("watchPanel")?.classList.add("hidden");
     document.getElementById("watchBtn").textContent = "☆ WATCH";
     document.getElementById("watchBtn").classList.remove("active");
     showToast("Stopped watching station");
@@ -837,8 +840,8 @@ function toggleWatch() {
     watchedStation = selectedStation;
     document.getElementById("watchBtn").textContent = "★ WATCHING";
     document.getElementById("watchBtn").classList.add("active");
-    document.getElementById("watchPanel").classList.remove("hidden");
-    document.getElementById("watchStationName").textContent = watchedStation.name;
+    document.getElementById("watchPanel")?.classList.remove("hidden");
+    const wsn = document.getElementById("watchStationName"); if (wsn) wsn.textContent = watchedStation.name;
     refreshWatch();
     showToast(`Now watching ${watchedStation.name} — updates every 2 min`);
   }
@@ -964,7 +967,7 @@ function bindUI() {
 
   document.getElementById("clearWatch")?.addEventListener("click", () => {
     watchedStation = null;
-    document.getElementById("watchPanel").classList.add("hidden");
+    document.getElementById("watchPanel")?.classList.add("hidden");
   });
 }
 
@@ -1024,8 +1027,27 @@ function showToast(msg) {
 // ========== NDBC BUOYS ==========
 async function loadBuoys() {
   try {
-    const res = await fetch("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt");
-    const text = await res.text();
+    // NDBC does not send CORS headers; use public CORS proxies as fallback chain
+    const sources = [
+      "https://corsproxy.io/?" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"),
+      "https://api.allorigins.win/raw?url=" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"),
+      "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
+    ];
+    let text = null;
+    let lastErr = null;
+    for (const url of sources) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        text = await res.text();
+        if (text && text.includes("LAT") || text.includes("STN") || text.split("\n").length > 10) break;
+        text = null;
+      } catch (e) {
+        lastErr = e;
+        text = null;
+      }
+    }
+    if (!text) throw lastErr || new Error("All buoy sources failed");
     const lines = text.trim().split("\n").filter(l => l && !l.startsWith("#"));
     buoyStations = [];
     for (const line of lines) {
@@ -1054,7 +1076,7 @@ async function loadBuoys() {
       });
     }
     const el = document.getElementById("buoyCount");
-    if (el) el.textContent = buoyStations.length;
+    if (el) el.textContent = String(buoyStations.length);
     console.log("Loaded", buoyStations.length, "NDBC buoys (US filter)");
     renderBuoyMarkers();
   } catch (e) {
@@ -1223,7 +1245,9 @@ document.addEventListener("DOMContentLoaded", () => {
       };
     }
     document.getElementById("addWatchBtn")?.addEventListener("click", () => {
-      addToWatch(document.getElementById("watchInput")?.value);
+      const typed = document.getElementById("watchInput")?.value?.trim();
+      const fromSel = document.getElementById("watchStationSelect")?.value;
+      addToWatch(typed || fromSel);
       const inp = document.getElementById("watchInput");
       if (inp) inp.value = "";
     });
@@ -1239,3 +1263,48 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }, 500);
 });
+
+
+// ========== WATCH STATE → STATION DROPDOWNS ==========
+function populateWatchDropdowns() {
+  const stateSel = document.getElementById("watchStateSelect");
+  const stnSel = document.getElementById("watchStationSelect");
+  if (!stateSel || !stnSel) return;
+
+  const states = [...new Set(allStations.map(s => s.state).filter(Boolean))].sort();
+  // Also include territories that may appear
+  const extra = ["PR","VI","GU","AS","MP","DC"];
+  extra.forEach(e => { if (!states.includes(e) && allStations.some(s => s.state === e)) states.push(e); });
+  states.sort();
+
+  stateSel.innerHTML = '<option value="">STATE / TERRITORY</option>';
+  states.forEach(st => {
+    const o = document.createElement("option");
+    o.value = st;
+    o.textContent = st;
+    stateSel.appendChild(o);
+  });
+
+  stateSel.onchange = () => {
+    const st = stateSel.value;
+    stnSel.innerHTML = '<option value="">STATION</option>';
+    stnSel.disabled = !st;
+    if (!st) return;
+    const list = allStations
+      .filter(s => s.state === st)
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    list.forEach(s => {
+      const o = document.createElement("option");
+      o.value = s.id;
+      o.textContent = `${s.name} (${s.id})`;
+      stnSel.appendChild(o);
+    });
+  };
+
+  stnSel.onchange = () => {
+    if (stnSel.value) {
+      addToWatch(stnSel.value);
+      // keep selection visible
+    }
+  };
+}

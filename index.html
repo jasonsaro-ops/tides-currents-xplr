@@ -222,13 +222,19 @@
       <div class="watch-strip-header">
         <span class="sec-title">WATCH // REALTIME STATION</span>
         <div class="watch-add">
-          <input type="text" id="watchInput" placeholder="Station ID or name..." />
+          <select id="watchStateSelect">
+            <option value="">STATE / TERRITORY</option>
+          </select>
+          <select id="watchStationSelect" disabled>
+            <option value="">STATION</option>
+          </select>
+          <input type="text" id="watchInput" placeholder="or type ID / name..." />
           <button id="addWatchBtn">ADD</button>
           <button id="clearWatchBtn" title="Clear">CLEAR</button>
         </div>
       </div>
       <div id="watchSlots" class="watch-slots">
-        <div class="watch-empty">Add a CO-OPS station or NDBC buoy ID above to monitor in realtime (updates every 2 min, SOL chime on change)</div>
+        <div class="watch-empty">Select a state/territory then a station (or type an ID) to monitor in realtime — updates every 2 min, SOL chime on change</div>
       </div>
     </section>
 
