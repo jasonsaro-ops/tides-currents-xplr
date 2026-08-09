@@ -1218,3 +1218,5 @@ html, body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.swatch.tidepred { background: #a29bfe; }

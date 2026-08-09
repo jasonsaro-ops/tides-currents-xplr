@@ -27,6 +27,9 @@ let showBuoys = true;
 let soundEnabled = true;
 let watchedList = [];           // array of {id, name, type, data}
 let buoyLayer = null;
+let tidePredStations = [];
+let showTidePred = false;
+let tidePredLayer = null;
 let freshIds = new Set();       // stations with recent data updates (for pulse)
 
 // Priority Mid-Atlantic stations (pinned top of Active)
@@ -67,6 +70,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindUI();
   await loadStations();
   await loadBuoys();
+  await loadTidePredStations();
   populateFilters();
   populateWatchDropdowns();
   renderMarkers();
@@ -1159,6 +1163,9 @@ function addToWatch(idOrName) {
   if (!q) return;
   let st = allStations.find(s => s.id.toLowerCase() === q || (s.name && s.name.toLowerCase().includes(q)));
   if (!st) {
+    st = tidePredStations.find(s => s.id.toLowerCase() === q || (s.name && s.name.toLowerCase().includes(q)));
+  }
+  if (!st) {
     const b = buoyStations.find(x => x.id.toLowerCase() === q);
     if (b) st = { id: b.id, name: b.name, type: "buoy", lat: b.lat, lng: b.lng };
   }
@@ -1256,6 +1263,18 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast(showBuoys ? "Buoys visible" : "Buoys hidden");
       };
     }
+    const tp = document.getElementById("toggleTidePred");
+    if (tp) {
+      tp.onclick = () => {
+        showTidePred = !showTidePred;
+        tp.classList.toggle("active", showTidePred);
+        renderTidePredMarkers();
+        showToast(showTidePred ? "Tide prediction stations ON map" : "Tide prediction stations hidden");
+      };
+    }
+    map?.on("zoomend", () => {
+      if (showTidePred) renderTidePredMarkers();
+    });
     document.getElementById("addWatchBtn")?.addEventListener("click", () => {
       const typed = document.getElementById("watchInput")?.value?.trim();
       const fromSel = document.getElementById("watchStationSelect")?.value;
@@ -1302,8 +1321,10 @@ function populateWatchDropdowns() {
     stnSel.innerHTML = '<option value="">STATION</option>';
     stnSel.disabled = !st;
     if (!st) return;
-    const list = allStations
-      .filter(s => s.state === st)
+    const merged = [...allStations, ...tidePredStations];
+    const seen = new Set();
+    const list = merged
+      .filter(s => s.state === st && !seen.has(s.id) && (seen.add(s.id) || true))
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     list.forEach(s => {
       const o = document.createElement("option");
@@ -1348,4 +1369,137 @@ function resetView() {
   document.getElementById("showPorts").checked = false;
   applyFilters();
   showToast("View reset — map & filters restored (watches kept)");
+}
+
+
+// ========== TIDE PREDICTION STATIONS (NOAA Tide Predictions) ==========
+async function loadTidePredStations() {
+  try {
+    const res = await fetch(`${MDAPI}/stations.json?type=tidepredictions`);
+    const json = await res.json();
+    tidePredStations = (json.stations || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      lat: s.lat,
+      lng: s.lng,
+      state: s.state || "",
+      type: "tidepredictions",
+      tidal: s.tidal,
+      tideType: s.tideType || "",
+      affiliations: s.affiliations || ""
+    })).filter(s => s.lat && s.lng);
+    console.log("Tide prediction stations:", tidePredStations.length);
+    const el = document.getElementById("tidePredCount");
+    if (el) el.textContent = tidePredStations.length;
+    if (showTidePred) renderTidePredMarkers();
+  } catch (e) {
+    console.warn("Tide pred stations load failed", e);
+  }
+}
+
+function renderTidePredMarkers() {
+  if (tidePredLayer) { map.removeLayer(tidePredLayer); tidePredLayer = null; }
+  if (!showTidePred || !tidePredStations.length) return;
+
+  // Limit density when zoomed out — show all when zoomed in
+  const z = map.getZoom();
+  let list = tidePredStations;
+  if (z < 6) {
+    // subsample for performance
+    list = tidePredStations.filter((_, i) => i % 4 === 0);
+  }
+
+  const group = L.layerGroup();
+  list.forEach(s => {
+    const icon = L.divIcon({
+      className: "",
+      html: `<div style="width:10px;height:10px;border-radius:50%;background:#a29bfe;border:1.5px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.5);opacity:0.9;"></div>`,
+      iconSize: [10, 10],
+      iconAnchor: [5, 5]
+    });
+    const m = L.marker([s.lat, s.lng], { icon });
+    m.bindTooltip(`<strong>${s.name}</strong><br/>${s.id} · ${s.state || ""} · TIDE PRED`, { direction: "top", offset: [0, -6] });
+    m.on("click", () => openTidePred(s));
+    group.addLayer(m);
+  });
+  group.addTo(map);
+  tidePredLayer = group;
+}
+
+async function openTidePred(s) {
+  selectedStation = s;
+  const modal = document.getElementById("stationModal");
+  modal.classList.remove("hidden");
+  document.getElementById("modalStationName").textContent = s.name || "TIDE PREDICTION";
+  document.getElementById("modalStationId").textContent = s.id;
+  document.getElementById("officialLink").href =
+    `https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${s.id}`;
+
+  document.getElementById("modalMeta").innerHTML = `
+    <div class="meta-item"><div class="mlabel">LAT</div><div class="mval">${s.lat?.toFixed(4) ?? "—"}</div></div>
+    <div class="meta-item"><div class="mlabel">LON</div><div class="mval">${s.lng?.toFixed(4) ?? "—"}</div></div>
+    <div class="meta-item"><div class="mlabel">STATE</div><div class="mval">${s.state || "—"}</div></div>
+    <div class="meta-item"><div class="mlabel">TYPE</div><div class="mval">TIDE PREDICTIONS</div></div>
+    <div class="meta-item"><div class="mlabel">TIDE</div><div class="mval">${s.tideType || "—"}</div></div>
+  `;
+
+  const content = document.getElementById("tabContent");
+  content.innerHTML = `<div class="loading">LOADING HIGH/LOW PREDICTIONS...</div>`;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelector('.tab[data-tab="predictions"]')?.classList.add("active");
+
+  // Fetch next ~72h hilo predictions
+  try {
+    const today = new Date();
+    const fmt = (d) =>
+      `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+    const url = `${DATAAPI}?begin_date=${fmt(today)}&range=72&station=${s.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
+    const res = await fetch(url);
+    const json = await res.json();
+    if (!json.predictions || !json.predictions.length) {
+      content.innerHTML = `<div class="loading">No predictions available for this station</div>`;
+      return;
+    }
+    const rows = json.predictions.slice(0, 16).map(p => `
+      <div class="data-card ${p.type === "H" || (p.type||"").toLowerCase().includes("high") ? "highlight" : ""}">
+        <div class="dlabel">${p.type || "TIDE"}</div>
+        <div class="dval">${p.v}<span class="dunit">ft MLLW</span></div>
+        <div class="dtime">${p.t}</div>
+      </div>
+    `).join("");
+    content.innerHTML = `
+      <div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">
+        HIGH / LOW TIDE PREDICTIONS (next ~72h) · 
+        <a href="https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${s.id}" target="_blank" style="color:var(--orange)">Full NOAA Tide Predictions ↗</a>
+      </div>
+      <div class="data-grid">${rows}</div>
+      <div style="margin-top:12px">
+        <button id="addTideToMapBtn" class="watch-btn" style="margin-right:8px">☆ WATCH THIS STATION</button>
+        <button id="showOnMapBtn" class="watch-btn">CENTER ON MAP</button>
+      </div>
+    `;
+    document.getElementById("addTideToMapBtn")?.addEventListener("click", () => {
+      addToWatch(s.id);
+      showToast(`Added ${s.name} to watch panel`);
+    });
+    document.getElementById("showOnMapBtn")?.addEventListener("click", () => {
+      map.setView([s.lat, s.lng], 10);
+      closeModal();
+    });
+  } catch (e) {
+    content.innerHTML = `<div class="loading">Error loading predictions: ${e.message}</div>`;
+  }
+
+  // Watch button in footer
+  const watchBtn = document.getElementById("watchBtn");
+  if (watchBtn) {
+    const already = watchedList.some(w => w.id === s.id);
+    watchBtn.textContent = already ? "★ ON WATCH" : "☆ WATCH";
+    watchBtn.classList.toggle("active", already);
+    watchBtn.onclick = () => {
+      addToWatch(s.id);
+      watchBtn.textContent = "★ ON WATCH";
+      watchBtn.classList.add("active");
+    };
+  }
 }
