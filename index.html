@@ -71,9 +71,10 @@
             </select>
           </div>
           <div class="filter-group">
-            <label>PRODUCT OVERLAY</label>
+            <label>PRODUCT OVERLAY (COLORS PINS)</label>
             <select id="productFilter">
               <option value="none">NONE</option>
+              <option value="all">SHOW ALL OVERLAYS</option>
               <option value="water_level">WATER LEVEL (MLLW)</option>
               <option value="air_temperature">AIR TEMPERATURE</option>
               <option value="water_temperature">WATER TEMPERATURE</option>
@@ -193,16 +194,30 @@
             <button class="tab" data-tab="met">MET</button>
             <button class="tab" data-tab="currents">CURRENTS</button>
             <button class="tab" data-tab="predictions">PREDICTIONS</button>
+            <button class="tab" data-tab="datums">DATUMS</button>
           </div>
           <div class="tab-content" id="tabContent">
             <div class="loading">FETCHING REAL-TIME DATA...</div>
           </div>
         </div>
         <div class="modal-footer">
-          <a id="officialLink" href="#" target="_blank" rel="noopener">OFFICIAL NOAA PAGE ↗</a>
+          <div style="display:flex;gap:12px;align-items:center">
+            <a id="officialLink" href="#" target="_blank" rel="noopener">OFFICIAL NOAA PAGE ↗</a>
+            <button id="watchBtn" class="watch-btn">☆ WATCH</button>
+          </div>
           <span class="update-time" id="modalUpdateTime"></span>
         </div>
       </div>
+    </div>
+
+    <!-- Watch Panel (single station realtime) -->
+    <div id="watchPanel" class="watch-panel hidden">
+      <div class="watch-header">
+        <span>WATCH // <span id="watchStationName">—</span></span>
+        <button id="clearWatch" title="Clear">×</button>
+      </div>
+      <div id="watchContent" class="watch-content">—</div>
+      <div class="watch-footer">Updated <span id="watchUpdated">—</span> · every 2 min · SOL chime on change</div>
     </div>
 
     <!-- Toast -->
