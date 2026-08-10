@@ -9,11 +9,16 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/golden-layout/1.5.9/goldenlayout.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/golden-layout/1.5.9/css/goldenlayout-base.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/golden-layout/1.5.9/css/goldenlayout-dark-theme.css" />
 </head>
 <body>
+  
+<body>
   <div id="app">
-    <!-- Top Header Bar -->
-    <header class="top-bar">
+<header class="top-bar">
       <div class="logo-section">
         <div class="logo-mark">◈</div>
         <div class="logo-text">
@@ -41,18 +46,32 @@
         <div class="status-item">
           <button id="soundToggle" class="sound-btn" title="Toggle SOL chime">🔊 SOUND ON</button>
         </div>
+        <div class="status-item">
+          <button type="button" id="saveLayoutBtn" class="sound-btn" title="Save docking layout JSON">SAVE LAYOUT</button>
+        </div>
+        <div class="status-item">
+          <button type="button" id="loadLayoutBtn" class="sound-btn" title="Load docking layout">LOAD LAYOUT</button>
+        </div>
+        <div class="status-item">
+          <button type="button" id="exportLayoutBtn" class="sound-btn" title="Export layout JSON">EXPORT</button>
+        </div>
+        <div class="status-item">
+          <button type="button" id="resetLayoutBtn" class="sound-btn" title="Reset default docking layout">RESET LAYOUT</button>
+        </div>
         <div class="status-item live">
           <span class="pulse"></span>
           <span class="label">LIVE</span>
         </div>
       </div>
     </header>
+    <div id="glRoot" class="gl-root"></div>
+    <input type="file" id="layoutFileInput" accept="application/json,.json" hidden />
 
-    <!-- Main Content -->
-    <main class="main-grid">
-      <!-- Left Panel: Filters + Legend -->
-      <aside class="left-panel">
-        <section class="panel-section">
+    <!-- Panel templates (moved into Golden Layout containers) -->
+    <div id="panelStore" aria-hidden="true">
+  <div class="gl-panel-template" id="tpl-filters" data-title="FILTERS">
+    <div class="gl-panel-body" id="panel-filters">
+<section class="panel-section">
           <div class="section-header">
             <span class="sec-title">FILTERS</span>
             <button class="icon-btn" id="resetFilters" title="Reset">↺</button>
@@ -97,8 +116,12 @@
             <label><input type="checkbox" id="showWarnings" /> WARNINGS / THRESHOLDS</label>
           </div>
         </section>
+    </div>
+  </div>
 
-        <section class="panel-section legend-section">
+  <div class="gl-panel-template" id="tpl-legend" data-title="LEGEND // DATA">
+    <div class="gl-panel-body" id="panel-legend">
+<section class="panel-section legend-section">
           <div class="section-header">
             <span class="sec-title">LEGEND // DATA</span>
           </div>
@@ -125,8 +148,12 @@
             <li><span class="swatch flood"></span> COASTAL FLOOD RISK</li>
           </ul>
         </section>
+    </div>
+  </div>
 
-        <section class="panel-section">
+  <div class="gl-panel-template" id="tpl-basemap" data-title="BASEMAP">
+    <div class="gl-panel-body" id="panel-basemap">
+<section class="panel-section">
           <div class="section-header">
             <span class="sec-title">BASEMAP</span>
           </div>
@@ -138,8 +165,12 @@
             <button class="bm-btn" data-bm="ocean">OCEAN</button>
           </div>
         </section>
-      
-        <section class="panel-section warnings-section" id="warningsSection">
+    </div>
+  </div>
+
+  <div class="gl-panel-template" id="tpl-warnings" data-title="NWS // COASTAL FLOOD ALERTS">
+    <div class="gl-panel-body" id="panel-warnings">
+<section class="panel-section warnings-section" id="warningsSection">
           <div class="sec-title">NWS // COASTAL FLOOD ALERTS
             <button id="refreshWarningsBtn" class="mini-btn" title="Refresh alerts">↻</button>
           </div>
@@ -148,8 +179,12 @@
             <div class="loading">Fetching active coastal flood alerts…</div>
           </div>
         </section>
+    </div>
+  </div>
 
-        <section class="panel-section nowcoast-section">
+  <div class="gl-panel-template" id="tpl-nowcoast" data-title="nowCOAST // MAP LAYERS">
+    <div class="gl-panel-body" id="panel-nowcoast">
+<section class="panel-section nowcoast-section">
           <div class="sec-title">nowCOAST // MAP LAYERS
             <a href="https://nowcoast.noaa.gov/" target="_blank" class="mini-btn" title="Open nowCOAST">↗</a>
           </div>
@@ -184,11 +219,82 @@
           <a class="nc-embed-btn" href="https://nowcoast.noaa.gov/" target="_blank" rel="noopener">OPEN FULL nowCOAST MAP ↗</a>
           <div class="nc-note">Layers load on THIS map via NOAA WMS. nowCOAST cannot be embedded (framing blocked) — use the link for their full viewer. Nautical charts need coastal zoom.</div>
         </section>
-</aside>
-      <div class="splitter-v" data-split="left" title="Drag to resize"></div>
+    </div>
+  </div>
 
-      <!-- Center: Map -->
-      <section class="map-container">
+  <div class="gl-panel-template" id="tpl-active" data-title="REALTIME // ACTIVE">
+    <div class="gl-panel-body" id="panel-active">
+<section class="panel-section">
+          <div class="section-header">
+            <span class="sec-title">REALTIME // ACTIVE</span>
+            <button class="icon-btn" id="refreshActive" title="Refresh">↻</button>
+          </div>
+          <div id="activeList" class="active-list">
+            <div class="loading">LOADING PORTS &amp; ACTIVE SITES...</div>
+          </div>
+        </section>
+    </div>
+  </div>
+
+  <div class="gl-panel-template" id="tpl-states" data-title="QUICK STATES">
+    <div class="gl-panel-body" id="panel-states">
+<section class="panel-section compact">
+          <div class="section-header">
+            <span class="sec-title">QUICK STATES</span>
+          </div>
+          <div class="quick-states" id="quickStates"></div>
+        </section>
+    </div>
+  </div>
+
+  <div class="gl-panel-template" id="tpl-sources" data-title="SOURCES">
+    <div class="gl-panel-body" id="panel-sources">
+<section class="panel-section">
+          <div class="section-header">
+            <span class="sec-title">SOURCES</span>
+          </div>
+          <div class="sources">
+            ESRI · TOMTOM · GARMIN · FAO · NOAA · USGS<br />
+            CO-OPS MDAPI · DATA API · PORTS® · NWIS
+          </div>
+          <div class="layout-bar">
+            <button type="button" id="saveLayoutBtn" title="Save workspace JSON">SAVE LAYOUT</button>
+            <button type="button" id="loadLayoutBtn" title="Load workspace JSON">LOAD LAYOUT</button>
+            <button type="button" id="exportLayoutBtn" title="Download layout JSON file">EXPORT JSON</button>
+            <button type="button" id="resetLayoutBtn" title="Reset panel sizes">RESET LAYOUT</button>
+          </div>
+          <input type="file" id="layoutFileInput" accept="application/json,.json" hidden />
+        </section>
+    </div>
+  </div>
+
+  <div class="gl-panel-template" id="tpl-hydro" data-title="HYDROLOGY // GAUGES">
+    <div class="gl-panel-body" id="panel-hydro">
+<section class="panel-section hydro-panel">
+          <div class="section-header">
+            <span class="sec-title">HYDROLOGY // GAUGES</span>
+          </div>
+          <div class="hydro-layers">
+            <label class="hydro-item"><input type="checkbox" data-nc="river" /> NWS River Gauges</label>
+            <div class="hydro-sub">USGS MONITORING</div>
+            <label class="hydro-item"><input type="checkbox" data-usgs="streamflow" /> Streamflow</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="surface" /> Surface-water levels</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="groundwater" /> Groundwater levels</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="springs" /> Spring water levels</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="wq" /> Water quality</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="precip" /> Precipitation</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="atmos" /> Atmospheric</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="cameras" /> Cameras</label>
+            <div class="hydro-note">Clustered at national zoom. Click site for charts.</div>
+            <a class="hydro-link" href="https://dashboard.waterdata.usgs.gov/app/nwd/en/" target="_blank" rel="noopener">USGS National Water Dashboard ↗</a>
+          </div>
+        </section>
+    </div>
+  </div>
+
+  <div class="gl-panel-template" id="tpl-map" data-title="MAP // TIDES &amp; CURRENTS">
+    <div class="gl-panel-body map-panel-body" id="panel-map">
+<section class="map-container">
         <div id="map"></div>
         <div class="map-overlay-top">
           <div class="coords" id="mapCoords">LAT -- LON --</div>
@@ -211,68 +317,12 @@
           <button id="toggleWarnings" title="NWS coastal flood alerts" class="active">⚠ WARNINGS</button>
         </div>
       </section>
-      <div class="splitter-v" data-split="right" title="Drag to resize"></div>
+    </div>
+  </div>
 
-      <!-- Right Panel: Active / Realtime -->
-      <aside class="right-panel">
-        <section class="panel-section">
-          <div class="section-header">
-            <span class="sec-title">REALTIME // ACTIVE</span>
-            <button class="icon-btn" id="refreshActive" title="Refresh">↻</button>
-          </div>
-          <div id="activeList" class="active-list">
-            <div class="loading">LOADING PORTS &amp; ACTIVE SITES...</div>
-          </div>
-        </section>
-
-        <section class="panel-section compact">
-          <div class="section-header">
-            <span class="sec-title">QUICK STATES</span>
-          </div>
-          <div class="quick-states" id="quickStates"></div>
-        </section>
-
-        <section class="panel-section">
-          <div class="section-header">
-            <span class="sec-title">SOURCES</span>
-          </div>
-          <div class="sources">
-            ESRI · TOMTOM · GARMIN · FAO · NOAA · USGS<br />
-            CO-OPS MDAPI · DATA API · PORTS® · NWIS
-          </div>
-          <div class="layout-bar">
-            <button type="button" id="saveLayoutBtn" title="Save workspace JSON">SAVE LAYOUT</button>
-            <button type="button" id="loadLayoutBtn" title="Load workspace JSON">LOAD LAYOUT</button>
-            <button type="button" id="exportLayoutBtn" title="Download layout JSON file">EXPORT JSON</button>
-            <button type="button" id="resetLayoutBtn" title="Reset panel sizes">RESET LAYOUT</button>
-          </div>
-          <input type="file" id="layoutFileInput" accept="application/json,.json" hidden />
-        </section>
-
-        <section class="panel-section hydro-panel">
-          <div class="section-header">
-            <span class="sec-title">HYDROLOGY // GAUGES</span>
-          </div>
-          <div class="hydro-layers">
-            <label class="hydro-item"><input type="checkbox" data-nc="river" /> NWS River Gauges</label>
-            <div class="hydro-sub">USGS MONITORING</div>
-            <label class="hydro-item"><input type="checkbox" data-usgs="streamflow" /> Streamflow</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="surface" /> Surface-water levels</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="groundwater" /> Groundwater levels</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="springs" /> Spring water levels</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="wq" /> Water quality</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="precip" /> Precipitation</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="atmos" /> Atmospheric</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="cameras" /> Cameras</label>
-            <div class="hydro-note">Clustered at national zoom. Click site for charts.</div>
-            <a class="hydro-link" href="https://dashboard.waterdata.usgs.gov/app/nwd/en/" target="_blank" rel="noopener">USGS National Water Dashboard ↗</a>
-          </div>
-        </section>
-      </aside>
-    </main>
-
-    <!-- Watch / Realtime strip -->
-    <section class="watch-strip" id="watchPanel">
+  <div class="gl-panel-template" id="tpl-watch" data-title="WATCH // REALTIME">
+    <div class="gl-panel-body" id="panel-watch">
+<section class="watch-strip" id="watchPanel">
       <div class="watch-strip-header">
         <span class="sec-title">WATCH // REALTIME STATIONS</span>
         <span class="watch-updated" id="watchUpdated"></span>
@@ -288,8 +338,12 @@
         <div class="watch-empty">Select a state/territory then a station (or type an ID) to monitor in realtime — updates every 2 min, SOL chime on change</div>
       </div>
     </section>
+    </div>
+  </div>
 
-    <!-- Toast -->
+    </div>
+
+<!-- Toast -->
     <div id="toast" class="toast hidden"></div>
 
     <!-- Station modal -->
@@ -354,13 +408,17 @@
 
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  </div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
   <script src="https://unpkg.com/esri-leaflet-vector@4.2.3/dist/esri-leaflet-vector.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="layout.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

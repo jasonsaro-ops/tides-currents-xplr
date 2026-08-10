@@ -1,3 +1,4 @@
+.hidden{display:none!important;visibility:hidden!important;position:absolute!important;left:-9999px!important;width:0!important;height:0!important;overflow:hidden!important;}
 :root {
   --bg: #0a0c0f;
   --panel: #111418;
@@ -2233,3 +2234,113 @@ body::after {
 }
 
 /* Popout window body (when opened via blob) uses same vars if possible */
+
+
+/* ========== GOLDEN LAYOUT / FLEXLAYOUT DOCKING ========== */
+#app {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+}
+.gl-root,
+#glRoot {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  position: relative !important;
+  background: #07090c !important;
+}
+#panelStore {
+  display: none !important;
+}
+.gl-component-host {
+  height: 100% !important;
+  overflow: auto !important;
+  background: #0c0f14 !important;
+  color: var(--text) !important;
+}
+.gl-panel-body {
+  height: 100%;
+  overflow: auto;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+.gl-panel-body.map-panel-body {
+  padding: 0 !important;
+  overflow: hidden !important;
+  position: relative;
+}
+.gl-panel-body.map-panel-body .map-container,
+.gl-panel-body.map-panel-body #map {
+  position: absolute !important;
+  inset: 0 !important;
+  height: 100% !important;
+  width: 100% !important;
+  min-height: 0 !important;
+}
+.gl-panel-body .watch-strip {
+  min-height: 100% !important;
+  max-height: none !important;
+  border-top: none !important;
+}
+
+/* Golden Layout chrome — Martian / mission theme */
+.lm_goldenlayout {
+  background: #07090c !important;
+}
+.lm_header {
+  background: #11161d !important;
+  border-bottom: 1px solid #1e252e !important;
+}
+.lm_tab {
+  background: #0c0f14 !important;
+  color: #8b9aab !important;
+  border: 1px solid #1e252e !important;
+  font-family: "Share Tech Mono", monospace !important;
+  font-size: 10px !important;
+  letter-spacing: 0.06em !important;
+  padding: 4px 12px !important;
+}
+.lm_tab.lm_active {
+  background: #151a22 !important;
+  color: #e67e22 !important;
+  border-bottom-color: #151a22 !important;
+}
+.lm_tab:hover {
+  color: #e8ecef !important;
+}
+.lm_header .lm_controls > li {
+  filter: invert(0.8) sepia(1) saturate(3) hue-rotate(5deg);
+}
+.lm_splitter {
+  background: #151a22 !important;
+  opacity: 1 !important;
+}
+.lm_splitter:hover,
+.lm_splitter.lm_dragging {
+  background: #e67e22 !important;
+}
+.lm_content {
+  background: #0c0f14 !important;
+  border: none !important;
+}
+.lm_drop_tab_placeholder {
+  background: rgba(230, 126, 34, 0.35) !important;
+}
+.lm_dragProxy .lm_content {
+  background: #11161d !important;
+  border: 1px solid #e67e22 !important;
+}
+.lm_maximised .lm_header {
+  background: #1a1208 !important;
+}
+.gl-missing {
+  padding: 16px;
+  color: #e74c3c;
+  font-family: monospace;
+}
+
+/* Hide old grid-only chrome when docking is active */
+.main-grid { display: none !important; }
+.splitter-v { display: none !important; }

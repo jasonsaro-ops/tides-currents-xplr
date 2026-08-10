@@ -372,6 +372,8 @@ function initExtraZoomControls() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  if (typeof initDockingLayout === "function") initDockingLayout();
+
   setInterval(() => { if (typeof loadNwsWarnings === 'function') loadNwsWarnings(); }, 5 * 60 * 1000);
   initClock();
   initMap();
