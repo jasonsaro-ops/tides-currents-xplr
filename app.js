@@ -2395,27 +2395,37 @@ function toggleNcLayer(key, on) {
   }
 
   if (key === "nautical") {
-    // NOAA Charts dynamic map (chart imagery)
+    // Prefer Maritime Chart Service (full ENC symbology), fallback vector tiles
+    let added = false;
     if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      const lyr = L.esri.dynamicMapLayer({
-        url: "https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer",
-        opacity: Math.min(op + 0.2, 1),
-        f: "image",
-        format: "png32"
-      });
-      lyr.addTo(map);
-      const redraw = () => { try { lyr.redraw(); } catch (_) {} };
-      map.on("moveend", redraw);
-      lyr._redrawHandler = redraw;
-      ncLayerState.nautical = lyr;
-      // Zoom hint
-      if (map.getZoom() < 9) {
-        map.setZoom(10);
-        showToast("Nautical Charts ON — zoomed in for chart detail");
-      } else {
-        showToast("Nautical Charts ON");
+      try {
+        const mcs = "https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/ENCOnline/MapServer/exts/MaritimeChartService/MapServer";
+        const lyr = L.esri.dynamicMapLayer({
+          url: mcs,
+          opacity: Math.min(op + 0.15, 1),
+          f: "image",
+          format: "png32"
+        });
+        lyr.addTo(map);
+        const redraw = () => { try { lyr.redraw(); } catch (_) {} };
+        map.on("moveend", redraw);
+        lyr._redrawHandler = redraw;
+        ncLayerState.nautical = lyr;
+        added = true;
+      } catch (e) {
+        console.warn("MCS failed", e);
       }
-    } else showToast("Esri Leaflet required for charts");
+    }
+    if (!added) {
+      // Gaia NOAA ENC vector tile fallback
+      ncLayerState.nautical = L.tileLayer(
+        "https://gaiavectortilerendering.global.ssl.fastly.net/noaa-enc/{z}/{x}/{y}.png",
+        { opacity: Math.min(op + 0.1, 1), maxZoom: 18, attribution: "NOAA ENC" }
+      );
+      ncLayerState.nautical.addTo(map);
+    }
+    if (map.getZoom() < 10) map.setZoom(11);
+    showToast("Nautical Charts ON — zoom coast for ENC detail");
     return;
   }
 
@@ -2449,25 +2459,14 @@ function toggleNcLayer(key, on) {
           });
         }
       });
-      bindRiverGaugePopups(fl);
       fl.on("click", (e) => {
         const p = e.layer?.feature?.properties || {};
         if (!p.gaugelid && !p.location) return;
-        // also open richer detail
-        const html = `
-          <div style="font-size:12px;line-height:1.5">
-            <b>${p.location || p.gaugelid}</b><br/>
-            Water body: ${p.waterbody || "—"}<br/>
-            Status: <b>${p.status || "—"}</b><br/>
-            Observed: <b>${p.observed ?? "—"} ${p.units || "ft"}</b> @ ${p.obstime || ""}<br/>
-            Action ${p.action ?? "—"} · Flood ${p.flood ?? "—"} · Mod ${p.moderate ?? "—"} · Maj ${p.major ?? "—"}<br/>
-            ${p.url ? `<a href="${p.url}" target="_blank" style="color:var(--orange)">View Hydrograph Online ↗</a>` : ""}
-          </div>`;
-        openLayerDetail(`RIVER GAUGE // ${p.gaugelid || ""}`, html);
+        openRiverGaugeDetail(p);
       });
       fl.addTo(map);
       ncLayerState.river = fl;
-      showToast("River Gauges ON — click a gauge for levels & hydrograph link");
+      showToast("River Gauges ON — click for hydrograph & thresholds");
     } else showToast("River gauges need Esri Leaflet");
     return;
   }
@@ -2497,6 +2496,101 @@ function toggleNcLayer(key, on) {
 async function loadTropicalCyclones() {
   toggleNcLayer("tropical", true);
 }
+
+
+async function openRiverGaugeDetail(p) {
+  const lid = (p.gaugelid || "").trim();
+  const lidLower = lid.toLowerCase();
+  const name = p.location || lid || "River Gauge";
+  const status = p.status || "—";
+  const color = gaugeStatusColor(status);
+  const pageUrl = p.url || (lidLower ? `https://water.noaa.gov/gauges/${lidLower}` : "");
+  const hgImg = lidLower ? `https://water.noaa.gov/resources/hydrographs/${lidLower}_hg.png` : "";
+
+  // Shell UI immediately
+  let html = `
+    <div style="font-size:12px;line-height:1.5;color:var(--text)">
+      <div style="font-size:14px;color:var(--orange);margin-bottom:6px">${name}</div>
+      <div>Water body: ${p.waterbody || "—"} · ${p.state || ""} · WFO ${p.wfo || ""}</div>
+      <div>Status: <b style="color:${color}">${status}</b></div>
+      <div>Observed: <b>${p.observed ?? "—"} ${p.units || "ft"}</b> @ ${p.obstime || ""}</div>
+      <div style="margin:8px 0;padding:8px;background:#0a0d12;border:1px solid var(--panel-border)">
+        <div style="font-size:10px;color:var(--text-muted)">THRESHOLDS (${p.units || "ft"})</div>
+        Action <b>${p.action ?? "—"}</b> · Flood <b>${p.flood ?? "—"}</b> ·
+        Moderate <b>${p.moderate ?? "—"}</b> · Major <b>${p.major ?? "—"}</b>
+      </div>
+      <div id="gaugeChartWrap" style="height:180px;margin:8px 0;background:#0a0d12;border:1px solid var(--panel-border);position:relative">
+        <div class="loading" style="padding:40px;text-align:center">Loading hydrograph…</div>
+      </div>
+      ${hgImg ? `<img id="gaugeHgImg" src="${hgImg}" alt="Hydrograph" style="width:100%;max-height:200px;object-fit:contain;background:#0a0d12;border:1px solid var(--panel-border);margin-bottom:8px" onerror="this.style.display='none'"/>` : ""}
+      ${pageUrl ? `<a href="${pageUrl}" target="_blank" style="color:var(--orange)">Open full gauge page on water.noaa.gov ↗</a>` : ""}
+    </div>`;
+  openLayerDetail(`RIVER GAUGE // ${lid}`, html);
+
+  // Fetch stage time series from NWPS API and chart it
+  if (!lidLower) return;
+  try {
+    const res = await fetch(`https://api.water.noaa.gov/nwps/v1/gauges/${lidLower}/stageflow`);
+    if (!res.ok) throw new Error("NWPS " + res.status);
+    const data = await res.json();
+    const series = data.observed?.data || data.data || [];
+    const pts = series
+      .filter(d => d.primary != null && d.primary > -900)
+      .slice(-120); // last ~points
+    const wrap = document.getElementById("gaugeChartWrap");
+    if (!wrap || !pts.length) {
+      if (wrap) wrap.innerHTML = `<div style="padding:20px;color:var(--text-muted);font-size:11px">No recent stage series — see image/link below</div>`;
+      return;
+    }
+    wrap.innerHTML = `<canvas id="gaugeStageChart"></canvas>`;
+    const ctx = document.getElementById("gaugeStageChart")?.getContext("2d");
+    if (!ctx || typeof Chart === "undefined") return;
+    const action = parseFloat(p.action);
+    const flood = parseFloat(p.flood);
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: pts.map(d => (d.validTime || "").replace("T", " ").slice(5, 16)),
+        datasets: [{
+          label: `Stage (${p.units || "ft"})`,
+          data: pts.map(d => d.primary),
+          borderColor: "#3498db",
+          backgroundColor: "rgba(52,152,219,0.12)",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.2,
+          fill: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          annotation: undefined,
+          title: {
+            display: true,
+            text: `${name} — observed stage`,
+            color: "#e8ecef",
+            font: { size: 11 }
+          }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 6, color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+          y: {
+            ticks: { color: "#5a6a7a", font: { size: 9 } },
+            grid: { color: "rgba(255,255,255,0.06)" },
+            title: { display: true, text: p.units || "ft", color: "#5a6a7a" }
+          }
+        }
+      }
+    });
+  } catch (e) {
+    const wrap = document.getElementById("gaugeChartWrap");
+    if (wrap) wrap.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:11px">Live series unavailable — hydrograph image below if available</div>`;
+  }
+}
+
 
 function bindNowcoastUI() {
   document.querySelectorAll("#nowcoastLayers input[data-nc]").forEach(cb => {
