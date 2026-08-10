@@ -2197,7 +2197,9 @@ function makeWmsLayer(layers, opts = {}) {
 function setNcOpacity(pct) {
   const o = (pct || 70) / 100;
   Object.values(ncLayerState).forEach(lyr => {
-    if (lyr && lyr.setOpacity) lyr.setOpacity(o);
+    if (!lyr) return;
+    if (lyr.setOpacity) lyr.setOpacity(o);
+    else if (lyr.eachLayer) lyr.eachLayer(l => { if (l.setOpacity) l.setOpacity(o); });
   });
 }
 
@@ -2395,37 +2397,35 @@ function toggleNcLayer(key, on) {
   }
 
   if (key === "nautical") {
-    // Prefer Maritime Chart Service (full ENC symbology), fallback vector tiles
-    let added = false;
-    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      try {
-        const mcs = "https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/ENCOnline/MapServer/exts/MaritimeChartService/MapServer";
-        const lyr = L.esri.dynamicMapLayer({
-          url: mcs,
-          opacity: Math.min(op + 0.15, 1),
-          f: "image",
-          format: "png32"
-        });
-        lyr.addTo(map);
-        const redraw = () => { try { lyr.redraw(); } catch (_) {} };
-        map.on("moveend", redraw);
-        lyr._redrawHandler = redraw;
-        ncLayerState.nautical = lyr;
-        added = true;
-      } catch (e) {
-        console.warn("MCS failed", e);
+    // NOAA ENC chart tiles (actual chart symbology — NOT footprint grids)
+    // MCS dynamic layers only return red cell outlines in browser; use rendered ENC tiles.
+    const enc = L.tileLayer(
+      "https://gaiavectortilerendering.global.ssl.fastly.net/noaa-enc/{z}/{x}/{y}.png",
+      {
+        opacity: Math.min(Math.max(op, 0.85), 1),
+        maxZoom: 18,
+        minZoom: 5,
+        attribution: "NOAA ENC",
+        zIndex: 450
       }
+    );
+    const seamark = L.tileLayer(
+      "https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",
+      {
+        opacity: 0.9,
+        maxZoom: 18,
+        minZoom: 8,
+        attribution: "OpenSeaMap",
+        zIndex: 451
+      }
+    );
+    const group = L.layerGroup([enc, seamark]);
+    group.addTo(map);
+    ncLayerState.nautical = group;
+    if (map.getZoom() < 9) {
+      map.setView(map.getCenter(), 10);
     }
-    if (!added) {
-      // Gaia NOAA ENC vector tile fallback
-      ncLayerState.nautical = L.tileLayer(
-        "https://gaiavectortilerendering.global.ssl.fastly.net/noaa-enc/{z}/{x}/{y}.png",
-        { opacity: Math.min(op + 0.1, 1), maxZoom: 18, attribution: "NOAA ENC" }
-      );
-      ncLayerState.nautical.addTo(map);
-    }
-    if (map.getZoom() < 10) map.setZoom(11);
-    showToast("Nautical Charts ON — zoom coast for ENC detail");
+    showToast("Nautical Charts ON — ENC + seamarks (zoom coasts)");
     return;
   }
 
