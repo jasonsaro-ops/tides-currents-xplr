@@ -2490,16 +2490,20 @@ function toggleNcLayer(key, on) {
 
   if (key === "usgs") {
     if (on) {
-      loadUsgsGaugesForView();
+      usgsLastBboxKey = "";
+      scheduleUsgsLoad();
       if (usgsMoveHandler) map.off("moveend", usgsMoveHandler);
       usgsMoveHandler = () => {
         if (document.querySelector('#nowcoastLayers input[data-nc="usgs"]')?.checked) {
-          loadUsgsGaugesForView();
+          scheduleUsgsLoad();
         }
       };
       map.on("moveend", usgsMoveHandler);
     } else {
       removeNc("usgs");
+      usgsLastBboxKey = "";
+      if (usgsAbort) usgsAbort.abort();
+      if (usgsDebounceTimer) clearTimeout(usgsDebounceTimer);
       if (usgsMoveHandler) {
         map.off("moveend", usgsMoveHandler);
         usgsMoveHandler = null;
@@ -2617,63 +2621,91 @@ async function openRiverGaugeDetail(p) {
 
 
 
-// ----- USGS Stream Gauges (NWIS) -----
+// ----- USGS Stream Gauges (fast OGC API) -----
 let usgsMoveHandler = null;
+let usgsAbort = null;
+let usgsDebounceTimer = null;
+let usgsLastBboxKey = "";
+const USGS_MIN_ZOOM = 7;
+const USGS_MAX_SITES = 400;
 
-function parseUsgsRdb(text) {
-  const lines = text.split("\n").filter(l => l && !l.startsWith("#"));
-  if (lines.length < 2) return [];
-  // skip header + format line
-  const rows = [];
-  for (let i = 2; i < lines.length; i++) {
-    const c = lines[i].split("\t");
-    if (c.length < 6) continue;
-    const lat = parseFloat(c[4]), lon = parseFloat(c[5]);
-    if (isNaN(lat) || isNaN(lon)) continue;
-    rows.push({
-      agency: c[0],
-      site_no: c[1],
-      name: c[2],
-      site_type: c[3],
-      lat, lon
-    });
-  }
-  return rows;
+function scheduleUsgsLoad() {
+  if (usgsDebounceTimer) clearTimeout(usgsDebounceTimer);
+  usgsDebounceTimer = setTimeout(() => loadUsgsGaugesForView(), 350);
 }
 
 async function loadUsgsGaugesForView() {
   if (!map) return;
-  const b = map.getBounds();
-  // limit bbox size
-  const west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
-  if (east - west > 12 || north - south > 12) {
-    showToast("Zoom in to load USGS gauges (max ~12° span)");
+  if (map.getZoom() < USGS_MIN_ZOOM) {
+    removeNc("usgs");
+    showToast(`Zoom in (z≥${USGS_MIN_ZOOM}) for USGS gauges`);
     return;
   }
-  const bbox = [west, south, east, north].map(v => v.toFixed(5)).join(",");
-  const url = `https://waterservices.usgs.gov/nwis/site/?format=rdb&bBox=${bbox}&siteType=ST&siteStatus=active&hasDataTypeCd=iv`;
+  const b = map.getBounds().pad(0.05);
+  const west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
+  if (east - west > 10 || north - south > 10) {
+    removeNc("usgs");
+    showToast("Zoom in for USGS gauges");
+    return;
+  }
+  const bboxKey = [west, south, east, north].map(v => v.toFixed(3)).join(",");
+  if (bboxKey === usgsLastBboxKey && ncLayerState.usgs) return; // cache hit
+  usgsLastBboxKey = bboxKey;
+
+  // Cancel prior in-flight request
+  if (usgsAbort) usgsAbort.abort();
+  usgsAbort = new AbortController();
+
+  // Modern OGC API is ~10–20× faster than legacy RDB site service
+  const url =
+    `https://api.waterdata.usgs.gov/ogcapi/v0/collections/monitoring-locations/items` +
+    `?f=json&limit=${USGS_MAX_SITES}&bbox=${west.toFixed(4)},${south.toFixed(4)},${east.toFixed(4)},${north.toFixed(4)}` +
+    `&site_type_code=ST`;
+
   try {
-    const res = await fetch(url);
-    const text = await res.text();
-    const sites = parseUsgsRdb(text);
+    const res = await fetch(url, { signal: usgsAbort.signal });
+    if (!res.ok) throw new Error("USGS HTTP " + res.status);
+    const data = await res.json();
+    const features = data.features || [];
+    const sites = [];
+    for (const f of features) {
+      const p = f.properties || {};
+      const coords = f.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const site_no = String(p.monitoring_location_number || "").replace(/^USGS-/, "");
+      if (!site_no) continue;
+      sites.push({
+        agency: p.agency_code || "USGS",
+        site_no,
+        name: p.monitoring_location_name || site_no,
+        site_type: p.site_type_code || "ST",
+        lat: coords[1],
+        lon: coords[0]
+      });
+    }
+
     removeNc("usgs");
     const group = L.layerGroup();
+    // Lightweight markers — no tooltips until hover to keep paint fast
     sites.forEach(s => {
       const m = L.circleMarker([s.lat, s.lon], {
-        radius: 5,
+        radius: 4,
         color: "#0a0d12",
         weight: 1,
         fillColor: "#1abc9c",
-        fillOpacity: 0.9
+        fillOpacity: 0.85
       });
-      m.bindTooltip(`${s.site_no} — ${s.name}`, { direction: "top", offset: [0, -4] });
+      m.on("mouseover", function () {
+        this.bindTooltip(`${s.site_no} — ${s.name}`, { sticky: true }).openTooltip();
+      });
       m.on("click", () => openUsgsGaugeDetail(s));
       group.addLayer(m);
     });
     group.addTo(map);
     ncLayerState.usgs = group;
-    showToast(`USGS gauges: ${sites.length} sites in view`);
+    showToast(`USGS: ${sites.length} stream gauges`);
   } catch (e) {
+    if (e.name === "AbortError") return;
     console.warn("USGS load", e);
     showToast("USGS gauge load failed");
   }
