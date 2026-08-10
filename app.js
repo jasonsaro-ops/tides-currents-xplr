@@ -2397,35 +2397,38 @@ function toggleNcLayer(key, on) {
   }
 
   if (key === "nautical") {
-    // NOAA ENC chart tiles (actual chart symbology — NOT footprint grids)
-    // MCS dynamic layers only return red cell outlines in browser; use rendered ENC tiles.
-    const enc = L.tileLayer(
-      "https://gaiavectortilerendering.global.ssl.fastly.net/noaa-enc/{z}/{x}/{y}.png",
-      {
-        opacity: Math.min(Math.max(op, 0.85), 1),
-        maxZoom: 18,
-        minZoom: 5,
-        attribution: "NOAA ENC",
-        zIndex: 450
-      }
+    // Reliable chart stack (NO MCS/footprints — those drew red misaligned grids):
+    // 1) Esri Ocean base (bathymetry shading)
+    // 2) Esri Ocean reference (depth contours, labels)
+    // 3) OpenSeaMap seamarks (buoys, lights, marks)
+    // 4) BlueTopo WMS for high-res NOAA bathymetry where available
+    const oceanBase = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 16, opacity: 1, attribution: "Esri Ocean", zIndex: 200 }
+    );
+    const oceanRef = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 16, opacity: 0.95, attribution: "Esri Ocean Ref", zIndex: 201 }
     );
     const seamark = L.tileLayer(
       "https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",
-      {
-        opacity: 0.9,
-        maxZoom: 18,
-        minZoom: 8,
-        attribution: "OpenSeaMap",
-        zIndex: 451
-      }
+      { maxZoom: 18, minZoom: 7, opacity: 1, attribution: "OpenSeaMap", zIndex: 452 }
     );
-    const group = L.layerGroup([enc, seamark]);
+    const bathy = makeWmsLayer("bluetopo:bathymetry", {
+      opacity: 0.45,
+      zIndex: 320,
+      attribution: "NOAA BlueTopo"
+    });
+    const group = L.layerGroup([oceanBase, oceanRef, bathy, seamark]);
     group.addTo(map);
     ncLayerState.nautical = group;
-    if (map.getZoom() < 9) {
-      map.setView(map.getCenter(), 10);
-    }
-    showToast("Nautical Charts ON — ENC + seamarks (zoom coasts)");
+    // Pull dark basemap down so ocean charts read clearly
+    try {
+      document.querySelectorAll(".basemap-btn").forEach(b => b.classList.remove("active"));
+    } catch (_) {}
+    if (map.getZoom() < 8) map.setZoom(9);
+    try { setBasemap("ocean"); } catch (_) {}
+    showToast("Nautical Charts ON — Ocean depth + seamarks + BlueTopo");
     return;
   }
 
