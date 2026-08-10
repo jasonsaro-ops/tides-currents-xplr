@@ -1506,3 +1506,16 @@ html, body {
   width: 100%;
   background: #000;
 }
+
+.nc-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  line-height: 1.35;
+}
+a.nc-embed-btn {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
+}

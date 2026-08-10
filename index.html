@@ -158,16 +158,22 @@
             <label class="nc-layer"><input type="checkbox" data-nc="satellite" /> Weather Satellite</label>
             <label class="nc-layer"><input type="checkbox" data-nc="tropical" /> Tropical Cyclones</label>
             <label class="nc-layer"><input type="checkbox" data-nc="alerts" checked /> Active Alerts (NWS)</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="zoneForecast" /> Zone Weather Forecasts</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="s100" /> S-100 Product Coverages</label>
             <label class="nc-layer"><input type="checkbox" data-nc="bluetopo" /> BlueTopo</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="waterlevels" /> Water Levels (nowCOAST)</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="s100" /> S-100 Product Coverages</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="s102" /> S-102 Bathymetry Coverage</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="s104" /> S-104 Water Level Coverage</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="s111" /> S-111 Currents Coverage</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="waterlevels" /> Water Level Stations (STOFS)</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="sst" /> Sea Surface Temperature</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="nautical" /> Nautical Charts (ENC)</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="precip" /> Precipitation (Radar QPE)</label>
           </div>
           <div class="nc-opacity">
             <span>LAYER OPACITY</span>
             <input type="range" id="ncOpacity" min="20" max="100" value="70" />
           </div>
-          <button id="openNowcoastEmbed" class="nc-embed-btn">EMBED nowCOAST VIEWER</button>
+          <a class="nc-embed-btn" href="https://nowcoast.noaa.gov/" target="_blank" rel="noopener">OPEN nowCOAST ↗ (new tab)</a>
+          <div class="nc-note">Layers draw on this map via NOAA WMS / NHC. Embed blocked by nowCOAST framing policy.</div>
         </section>
 </aside>
 
