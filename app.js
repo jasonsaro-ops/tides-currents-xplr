@@ -2577,84 +2577,173 @@ function removeNc(key) {
 }
 
 
-// ========== NEXRAD / RainViewer animated radar (stable) ==========
+// ========== NEXRAD radar — IEM primary (stable) + optional sources ==========
 const radarPlayer = {
+  source: "iem", // iem | rainviewer | nowcoast
   host: "https://tilecache.rainviewer.com",
-  frames: [],
+  frames: [], // { id, label, time, urlTemplate } or RainViewer {time,path}
   index: 0,
   playing: false,
   timer: null,
   layer: null,
   speed: 3,
-  opacity: 0.7,
+  opacity: 0.75,
   enabled: false
 };
 
+/** Iowa State Mesonet CONUS N0Q mosaic — very reliable public XYZ tiles */
+function buildIemFrames() {
+  const frames = [];
+  // oldest → newest (every 5 minutes back to 55)
+  for (let m = 55; m >= 5; m -= 5) {
+    const mm = String(m).padStart(2, "0");
+    const layer = `nexrad-n0q-m${mm}m-900913`;
+    frames.push({
+      id: layer,
+      label: `${mm} min ago`,
+      minutesAgo: m,
+      urlTemplate: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${layer}/{z}/{x}/{y}.png`
+    });
+  }
+  frames.push({
+    id: "nexrad-n0q-900913",
+    label: "current",
+    minutesAgo: 0,
+    urlTemplate: "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png"
+  });
+  return frames;
+}
+
 async function fetchRadarFrames() {
+  const src = radarPlayer.source || "iem";
+
+  if (src === "iem") {
+    radarPlayer.frames = buildIemFrames();
+    radarPlayer.index = radarPlayer.frames.length - 1;
+    return radarPlayer.frames.length;
+  }
+
+  if (src === "nowcoast") {
+    radarPlayer.frames = [{
+      id: "nowcoast",
+      label: "nowCOAST live",
+      minutesAgo: 0,
+      wms: true
+    }];
+    radarPlayer.index = 0;
+    return 1;
+  }
+
+  // RainViewer fallback
   const res = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" });
   if (!res.ok) throw new Error("RainViewer HTTP " + res.status);
   const data = await res.json();
   radarPlayer.host = (data.host || radarPlayer.host).replace(/\/$/, "");
-  rainViewerHost = radarPlayer.host;
-  // Use past frames only — more reliable than nowcast for looping
   const past = Array.isArray(data.radar?.past) ? data.radar.past : [];
-  radarPlayer.frames = past.filter(f => f && f.path && f.time);
-  if (radarPlayer.frames.length) {
-    radarPlayer.index = radarPlayer.frames.length - 1;
-    rainViewerRadarPath = radarPlayer.frames[radarPlayer.index].path;
-  }
+  radarPlayer.frames = past.filter(f => f && f.path && f.time).map(f => ({
+    id: f.path,
+    label: new Date(f.time * 1000).toISOString().substr(11, 5) + "Z",
+    time: f.time,
+    path: f.path,
+    urlTemplate: `${radarPlayer.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`
+  }));
+  radarPlayer.index = Math.max(0, radarPlayer.frames.length - 1);
   return radarPlayer.frames.length;
 }
 
-function radarTileUrlTemplate(path) {
-  // size 256, color 2 (universal), smooth 1, snow 1
-  return `${radarPlayer.host}${path}/256/{z}/{x}/{y}/2/1_1.png`;
-}
-
-function ensureRadarLayer() {
-  if (!map) return null;
-  if (radarPlayer.layer && map.hasLayer(radarPlayer.layer)) return radarPlayer.layer;
-
-  // Persistent layer — URL updated in place (no remove/re-add → no flash)
-  const path = radarPlayer.frames[radarPlayer.index]?.path
-    || radarPlayer.frames[radarPlayer.frames.length - 1]?.path
-    || "";
-  if (!path) return null;
-
+function destroyRadarLayer() {
   if (radarPlayer.layer) {
     try { map.removeLayer(radarPlayer.layer); } catch (_) {}
+    radarPlayer.layer = null;
+  }
+  if (ncLayerState.radar && ncLayerState.radar !== radarPlayer.layer) {
+    try { map.removeLayer(ncLayerState.radar); } catch (_) {}
+  }
+  ncLayerState.radar = null;
+}
+
+function ensureRadarLayerForFrame(frame) {
+  if (!map || !frame) return null;
+
+  // nowCOAST WMS — single static mosaic
+  if (frame.wms) {
+    if (radarPlayer.layer && radarPlayer.layer._isWms) {
+      return radarPlayer.layer;
+    }
+    destroyRadarLayer();
+    const wms = L.tileLayer.wms("https://nowcoast.noaa.gov/geoserver/weather_radar/wms", {
+      layers: "base_reflectivity_mosaic",
+      format: "image/png",
+      transparent: true,
+      version: "1.1.1",
+      opacity: radarPlayer.opacity,
+      zIndex: 450,
+      uppercase: true,
+      attribution: "NOAA nowCOAST NEXRAD"
+    });
+    wms._isWms = true;
+    wms.addTo(map);
+    radarPlayer.layer = wms;
+    ncLayerState.radar = wms;
+    return wms;
   }
 
-  radarPlayer.layer = L.tileLayer(radarTileUrlTemplate(path), {
+  const url = frame.urlTemplate;
+  if (!url) return null;
+
+  // Reuse one XYZ layer; only setUrl between frames
+  if (radarPlayer.layer && !radarPlayer.layer._isWms && map.hasLayer(radarPlayer.layer)) {
+    try {
+      if (typeof radarPlayer.layer.setUrl === "function") {
+        radarPlayer.layer.setUrl(url, false);
+      } else {
+        radarPlayer.layer._url = url;
+        radarPlayer.layer.redraw();
+      }
+    } catch (e) {
+      console.warn("radar setUrl", e);
+    }
+    return radarPlayer.layer;
+  }
+
+  destroyRadarLayer();
+  const layer = L.tileLayer(url, {
     opacity: radarPlayer.opacity,
     zIndex: 450,
-    // RainViewer radar is authored ~z0–7; scale beyond that so zoom doesn't blank the layer
-    maxNativeZoom: 7,
     maxZoom: 18,
-    minZoom: 1,
+    maxNativeZoom: 10,
+    minZoom: 3,
     updateWhenIdle: true,
     updateWhenZooming: false,
     keepBuffer: 2,
     className: "radar-tiles",
-    attribution: "RainViewer · NEXRAD"
+    attribution: radarPlayer.source === "iem"
+      ? "Iowa Environmental Mesonet · NEXRAD N0Q"
+      : "RainViewer · NEXRAD",
+    errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
   });
-  radarPlayer.layer.addTo(map);
-  ncLayerState.radar = radarPlayer.layer;
-  return radarPlayer.layer;
+  layer.addTo(map);
+  radarPlayer.layer = layer;
+  ncLayerState.radar = layer;
+  return layer;
 }
 
 function updateRadarLabels() {
-  if (!radarPlayer.frames.length) return;
   const frame = radarPlayer.frames[radarPlayer.index];
   if (!frame) return;
-  const t = new Date(frame.time * 1000);
-  const iso = isNaN(t.getTime()) ? "—" : t.toISOString().replace("T", " ").substring(0, 19) + "Z";
+  let timeText = frame.label || "—";
+  if (frame.time) {
+    const t = new Date(frame.time * 1000);
+    if (!isNaN(t.getTime())) timeText = t.toISOString().replace("T", " ").substring(0, 19) + "Z";
+  } else if (frame.minutesAgo != null) {
+    timeText = frame.minutesAgo === 0 ? "CURRENT" : `${frame.minutesAgo} MIN AGO`;
+  }
   const fl = document.getElementById("radarFrameLabel");
   const tl = document.getElementById("radarTimeLabel");
   const hud = document.getElementById("radarHudTime");
   if (fl) fl.textContent = `FRAME ${radarPlayer.index + 1}/${radarPlayer.frames.length}`;
-  if (tl) tl.textContent = iso;
-  if (hud) hud.textContent = `RADAR ${iso}`;
+  if (tl) tl.textContent = timeText;
+  if (hud) hud.textContent = `RADAR ${timeText}`;
 }
 
 function showRadarFrame(i) {
@@ -2662,29 +2751,12 @@ function showRadarFrame(i) {
   const n = radarPlayer.frames.length;
   radarPlayer.index = ((i % n) + n) % n;
   const frame = radarPlayer.frames[radarPlayer.index];
-  if (!frame?.path) return;
-
-  const layer = ensureRadarLayer();
-  if (!layer) return;
-
-  const url = radarTileUrlTemplate(frame.path);
-  // setUrl keeps the same layer instance — stable across zoom & play
-  try {
-    if (typeof layer.setUrl === "function") {
-      layer.setUrl(url, false);
-    } else {
-      layer._url = url;
-      layer.redraw();
-    }
-  } catch (e) {
-    console.warn("radar setUrl", e);
-  }
+  ensureRadarLayerForFrame(frame);
   updateRadarLabels();
 }
 
 function radarPlayIntervalMs() {
   const s = Math.max(1, Math.min(8, radarPlayer.speed || 3));
-  // slower default loop for readability (speed 3 ≈ 700ms)
   return Math.round(1400 - (s - 1) * (1200 / 7));
 }
 
@@ -2704,7 +2776,7 @@ function stopRadarPlayback() {
 }
 
 function startRadarPlayback() {
-  if (!radarPlayer.enabled || !radarPlayer.frames.length) return;
+  if (!radarPlayer.enabled || radarPlayer.frames.length < 2) return;
   stopRadarPlayback();
   radarPlayer.playing = true;
   const pb = document.getElementById("radarPlayBtn");
@@ -2719,7 +2791,6 @@ function startRadarPlayback() {
       stopRadarPlayback();
       return;
     }
-    // ensure layer still on map after basemap / zoom churn
     if (radarPlayer.layer && !map.hasLayer(radarPlayer.layer)) {
       try { radarPlayer.layer.addTo(map); } catch (_) {}
     }
@@ -2737,29 +2808,27 @@ async function enableRadarLayer() {
   radarPlayer.enabled = true;
   document.getElementById("radarControls")?.classList.remove("hidden");
   document.getElementById("radarHud")?.classList.remove("hidden");
+  // Sync source dropdown if present
+  const sel = document.getElementById("radarSource");
+  if (sel) radarPlayer.source = sel.value || "iem";
+
   try {
     const n = await fetchRadarFrames();
     if (!n) throw new Error("no frames");
-    ensureRadarLayer();
     showRadarFrame(radarPlayer.frames.length - 1);
-    startRadarPlayback();
-    showToast(`Radar ON — ${n} frames looping`);
+    if (n > 1) startRadarPlayback();
+    const name = radarPlayer.source === "iem" ? "IEM NEXRAD" :
+      radarPlayer.source === "nowcoast" ? "nowCOAST WMS" : "RainViewer";
+    showToast(`Radar ON — ${name} (${n} frames)`);
   } catch (e) {
     console.warn("radar enable", e);
-    // Static nowCOAST fallback (no animation)
+    // Hard fallback: IEM current only
     try {
-      if (radarPlayer.layer) {
-        map.removeLayer(radarPlayer.layer);
-        radarPlayer.layer = null;
-      }
-      const wms = makeWmsLayer("weather_radar:base_reflectivity_mosaic", {
-        opacity: radarPlayer.opacity,
-        zIndex: 450
-      });
-      wms.addTo(map);
-      radarPlayer.layer = wms;
-      ncLayerState.radar = wms;
-      showToast("Radar static WMS (animation unavailable)");
+      radarPlayer.source = "iem";
+      radarPlayer.frames = buildIemFrames();
+      showRadarFrame(radarPlayer.frames.length - 1);
+      startRadarPlayback();
+      showToast("Radar ON — IEM NEXRAD fallback");
     } catch (e2) {
       showToast("Radar load failed");
       radarPlayer.enabled = false;
@@ -2770,14 +2839,7 @@ async function enableRadarLayer() {
 function disableRadarLayer() {
   radarPlayer.enabled = false;
   stopRadarPlayback();
-  if (radarPlayer.layer) {
-    try { map.removeLayer(radarPlayer.layer); } catch (_) {}
-    radarPlayer.layer = null;
-  }
-  if (ncLayerState.radar) {
-    try { map.removeLayer(ncLayerState.radar); } catch (_) {}
-    ncLayerState.radar = null;
-  }
+  destroyRadarLayer();
   document.getElementById("radarControls")?.classList.add("hidden");
   document.getElementById("radarHud")?.classList.add("hidden");
 }
@@ -2801,27 +2863,39 @@ function bindRadarControls() {
     if (!radarPlayer.enabled) return;
     const wasPlaying = radarPlayer.playing;
     stopRadarPlayback();
-    try {
-      await fetchRadarFrames();
-      showRadarFrame(radarPlayer.frames.length - 1);
-      if (wasPlaying) startRadarPlayback();
-      showToast("Radar frames refreshed");
-    } catch (_) {
-      showToast("Radar refresh failed");
-    }
+    // Bust tile cache by recreating layer
+    destroyRadarLayer();
+    await fetchRadarFrames();
+    showRadarFrame(radarPlayer.frames.length - 1);
+    if (wasPlaying && radarPlayer.frames.length > 1) startRadarPlayback();
+    showToast("Radar refreshed");
   });
   document.getElementById("radarSpeed")?.addEventListener("input", (e) => {
     radarPlayer.speed = parseInt(e.target.value, 10) || 3;
     if (radarPlayer.playing) startRadarPlayback();
   });
   document.getElementById("radarOpacity")?.addEventListener("input", (e) => {
-    radarPlayer.opacity = (parseInt(e.target.value, 10) || 70) / 100;
+    radarPlayer.opacity = (parseInt(e.target.value, 10) || 75) / 100;
     if (radarPlayer.layer?.setOpacity) radarPlayer.layer.setOpacity(radarPlayer.opacity);
+  });
+  document.getElementById("radarSource")?.addEventListener("change", async (e) => {
+    if (!radarPlayer.enabled) {
+      radarPlayer.source = e.target.value;
+      return;
+    }
+    stopRadarPlayback();
+    destroyRadarLayer();
+    radarPlayer.source = e.target.value;
+    await fetchRadarFrames();
+    showRadarFrame(radarPlayer.frames.length - 1);
+    if (radarPlayer.frames.length > 1) startRadarPlayback();
+    showToast("Radar source: " + radarPlayer.source.toUpperCase());
   });
 }
 
 async function initRainViewer() {
   bindRadarControls();
+  radarPlayer.source = "iem";
   try { await fetchRadarFrames(); } catch (_) {}
 }
 

@@ -177,6 +177,15 @@
                 <button type="button" id="radarRefreshBtn" title="Refresh frames">↻</button>
               </div>
               <div class="radar-controls-row">
+                <label>SOURCE
+                  <select id="radarSource">
+                    <option value="iem" selected>IEM NEXRAD (stable)</option>
+                    <option value="nowcoast">nowCOAST WMS</option>
+                    <option value="rainviewer">RainViewer</option>
+                  </select>
+                </label>
+              </div>
+              <div class="radar-controls-row">
                 <label>SPEED <input type="range" id="radarSpeed" min="1" max="8" value="3" /></label>
               </div>
               <div class="radar-controls-row">
@@ -186,7 +195,7 @@
                 <span id="radarFrameLabel">FRAME —</span>
                 <span id="radarTimeLabel">—</span>
               </div>
-              <div class="radar-note">Animated NEXRAD mosaic via RainViewer · NOAA base reflectivity available via nowCOAST WMS</div>
+              <div class="radar-note">Default: Iowa State IEM NEXRAD mosaic (most reliable). Optional: nowCOAST WMS or RainViewer.</div>
             </div>
             <label class="nc-layer"><input type="checkbox" data-nc="satellite" /> Weather Satellite</label>
             <label class="nc-layer"><input type="checkbox" data-nc="nautical" /> Nautical Charts</label>
