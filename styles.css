@@ -3323,21 +3323,28 @@ button.logo-mark:active {
   color: var(--text-muted, #5a6a7a);
   line-height: 1.35;
 }
+/* Radar time HUD — top center, clear of zoom stack & bottom tools */
 .radar-hud {
-  position: absolute;
-  bottom: 56px;
-  left: 10px;
-  z-index: 610;
-  display: flex;
+  position: absolute !important;
+  top: 10px !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: translateX(-50%) !important;
+  z-index: 550 !important;
+  display: flex !important;
   align-items: center;
   gap: 8px;
-  background: rgba(12,15,20,0.92);
-  border: 1px solid #2a3340;
+  background: rgba(12,15,20,0.92) !important;
+  border: 1px solid rgba(230,126,34,0.45) !important;
   border-radius: 3px;
-  padding: 5px 8px;
+  padding: 5px 10px;
   font-size: 10px;
   color: var(--orange);
   font-family: var(--font-mono);
+  pointer-events: auto;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
 }
 .radar-hud.hidden { display: none !important; }
 .radar-hud button {
@@ -3354,6 +3361,17 @@ button.logo-mark:active {
   color: var(--orange);
 }
 
+/* Keep bottom tool strip clear */
+.map-controls-left {
+  z-index: 600 !important;
+  max-width: calc(100% - 24px) !important;
+}
+
 .radar-tiles {
   pointer-events: none !important;
+}
+
+.radar-tiles {
+  pointer-events: none !important;
+  image-rendering: auto;
 }

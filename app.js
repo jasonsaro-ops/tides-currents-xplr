@@ -2594,8 +2594,8 @@ const radarPlayer = {
 /** Iowa State Mesonet CONUS N0Q mosaic — very reliable public XYZ tiles */
 function buildIemFrames() {
   const frames = [];
-  // oldest → newest (every 5 minutes back to 55)
-  for (let m = 55; m >= 5; m -= 5) {
+  // Fewer frames = faster loop (every 10 min, oldest → newest)
+  for (let m of [50, 40, 30, 20, 10, 5]) {
     const mm = String(m).padStart(2, "0");
     const layer = `nexrad-n0q-m${mm}m-900913`;
     frames.push({
@@ -2710,13 +2710,17 @@ function ensureRadarLayerForFrame(frame) {
   const layer = L.tileLayer(url, {
     opacity: radarPlayer.opacity,
     zIndex: 450,
+    // Show at continental + local zooms; scale tiles past native
+    minZoom: 1,
     maxZoom: 18,
-    maxNativeZoom: 10,
-    minZoom: 3,
+    maxNativeZoom: 7,
+    tileSize: 256,
+    zoomOffset: 0,
     updateWhenIdle: true,
     updateWhenZooming: false,
-    keepBuffer: 2,
+    keepBuffer: 1,
     className: "radar-tiles",
+    crossOrigin: true,
     attribution: radarPlayer.source === "iem"
       ? "Iowa Environmental Mesonet · NEXRAD N0Q"
       : "RainViewer · NEXRAD",
@@ -2757,7 +2761,7 @@ function showRadarFrame(i) {
 
 function radarPlayIntervalMs() {
   const s = Math.max(1, Math.min(8, radarPlayer.speed || 3));
-  return Math.round(1400 - (s - 1) * (1200 / 7));
+  return Math.round(1600 - (s - 1) * (1100 / 7));
 }
 
 function stopRadarPlayback() {
@@ -2815,11 +2819,11 @@ async function enableRadarLayer() {
   try {
     const n = await fetchRadarFrames();
     if (!n) throw new Error("no frames");
+    // Show current frame immediately; user hits play for loop (faster, NOAA-like)
     showRadarFrame(radarPlayer.frames.length - 1);
-    if (n > 1) startRadarPlayback();
     const name = radarPlayer.source === "iem" ? "IEM NEXRAD" :
       radarPlayer.source === "nowcoast" ? "nowCOAST WMS" : "RainViewer";
-    showToast(`Radar ON — ${name} (${n} frames)`);
+    showToast(`Radar ON — ${name} · press ▶ to animate`);
   } catch (e) {
     console.warn("radar enable", e);
     // Hard fallback: IEM current only
@@ -2827,8 +2831,7 @@ async function enableRadarLayer() {
       radarPlayer.source = "iem";
       radarPlayer.frames = buildIemFrames();
       showRadarFrame(radarPlayer.frames.length - 1);
-      startRadarPlayback();
-      showToast("Radar ON — IEM NEXRAD fallback");
+      showToast("Radar ON — IEM NEXRAD · press ▶ to animate");
     } catch (e2) {
       showToast("Radar load failed");
       radarPlayer.enabled = false;
