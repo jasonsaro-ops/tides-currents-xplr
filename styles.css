@@ -1520,3 +1520,11 @@ a.nc-embed-btn {
   text-decoration: none;
   box-sizing: border-box;
 }
+
+.alert-modal-panel iframe {
+  background: #fff;
+  border-radius: 2px;
+}
+.alert-modal-panel {
+  max-width: min(720px, 96vw) !important;
+}

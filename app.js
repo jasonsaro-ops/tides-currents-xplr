@@ -2488,6 +2488,27 @@ function toggleNcLayer(key, on) {
     return;
   }
 
+  if (key === "usgs") {
+    if (on) {
+      loadUsgsGaugesForView();
+      if (usgsMoveHandler) map.off("moveend", usgsMoveHandler);
+      usgsMoveHandler = () => {
+        if (document.querySelector('#nowcoastLayers input[data-nc="usgs"]')?.checked) {
+          loadUsgsGaugesForView();
+        }
+      };
+      map.on("moveend", usgsMoveHandler);
+    } else {
+      removeNc("usgs");
+      if (usgsMoveHandler) {
+        map.off("moveend", usgsMoveHandler);
+        usgsMoveHandler = null;
+      }
+      showToast("USGS gauges OFF");
+    }
+    return;
+  }
+
   if (key === "surface_obs") {
     showToast("Surface obs: use station markers + Weather Radar for live conditions");
     return;
@@ -2591,6 +2612,116 @@ async function openRiverGaugeDetail(p) {
   } catch (e) {
     const wrap = document.getElementById("gaugeChartWrap");
     if (wrap) wrap.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:11px">Live series unavailable — hydrograph image below if available</div>`;
+  }
+}
+
+
+
+// ----- USGS Stream Gauges (NWIS) -----
+let usgsMoveHandler = null;
+
+function parseUsgsRdb(text) {
+  const lines = text.split("\n").filter(l => l && !l.startsWith("#"));
+  if (lines.length < 2) return [];
+  // skip header + format line
+  const rows = [];
+  for (let i = 2; i < lines.length; i++) {
+    const c = lines[i].split("\t");
+    if (c.length < 6) continue;
+    const lat = parseFloat(c[4]), lon = parseFloat(c[5]);
+    if (isNaN(lat) || isNaN(lon)) continue;
+    rows.push({
+      agency: c[0],
+      site_no: c[1],
+      name: c[2],
+      site_type: c[3],
+      lat, lon
+    });
+  }
+  return rows;
+}
+
+async function loadUsgsGaugesForView() {
+  if (!map) return;
+  const b = map.getBounds();
+  // limit bbox size
+  const west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
+  if (east - west > 12 || north - south > 12) {
+    showToast("Zoom in to load USGS gauges (max ~12° span)");
+    return;
+  }
+  const bbox = [west, south, east, north].map(v => v.toFixed(5)).join(",");
+  const url = `https://waterservices.usgs.gov/nwis/site/?format=rdb&bBox=${bbox}&siteType=ST&siteStatus=active&hasDataTypeCd=iv`;
+  try {
+    const res = await fetch(url);
+    const text = await res.text();
+    const sites = parseUsgsRdb(text);
+    removeNc("usgs");
+    const group = L.layerGroup();
+    sites.forEach(s => {
+      const m = L.circleMarker([s.lat, s.lon], {
+        radius: 5,
+        color: "#0a0d12",
+        weight: 1,
+        fillColor: "#1abc9c",
+        fillOpacity: 0.9
+      });
+      m.bindTooltip(`${s.site_no} — ${s.name}`, { direction: "top", offset: [0, -4] });
+      m.on("click", () => openUsgsGaugeDetail(s));
+      group.addLayer(m);
+    });
+    group.addTo(map);
+    ncLayerState.usgs = group;
+    showToast(`USGS gauges: ${sites.length} sites in view`);
+  } catch (e) {
+    console.warn("USGS load", e);
+    showToast("USGS gauge load failed");
+  }
+}
+
+async function openUsgsGaugeDetail(s) {
+  const siteNo = s.site_no;
+  const mlId = `USGS-${siteNo}`;
+  const statsUrl = `https://waterdata.usgs.gov/monitoring-location/${mlId}/statistical-graphs`;
+  const locUrl = `https://waterdata.usgs.gov/monitoring-location/${mlId}/#parameterCode=00065&period=P7D`;
+  const gwisUrl = `https://dashboard.waterdata.usgs.gov/api/gwis/2.1.1/service/site?sitenumber=${siteNo}&period=p7d&pad=false`;
+  const nwdUrl = `https://dashboard.waterdata.usgs.gov/app/nwd/en/?site_no=${siteNo}`;
+
+  let html = `
+    <div style="font-size:12px;line-height:1.45;color:var(--text)">
+      <div style="font-size:14px;color:#1abc9c;margin-bottom:4px">${s.name || siteNo}</div>
+      <div style="color:var(--text-muted)">USGS ${siteNo} · ${s.site_type || "ST"} · ${s.lat.toFixed(4)}, ${s.lon.toFixed(4)}</div>
+      <div id="usgsIvStats" style="margin:10px 0;padding:8px;background:#0a0d12;border:1px solid var(--panel-border)">Loading latest values…</div>
+      <div style="margin:8px 0;height:280px;border:1px solid var(--panel-border);background:#0a0d12">
+        <iframe src="${gwisUrl}" style="width:100%;height:100%;border:0;background:#fff" title="USGS hydrograph"></iframe>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
+        <a href="${statsUrl}" target="_blank" rel="noopener" style="color:var(--orange)">Statistical graphs ↗</a>
+        <a href="${locUrl}" target="_blank" rel="noopener" style="color:var(--orange)">Monitoring location ↗</a>
+        <a href="${nwdUrl}" target="_blank" rel="noopener" style="color:var(--orange)">National Water Dashboard ↗</a>
+      </div>
+    </div>`;
+  openLayerDetail(`USGS // ${siteNo}`, html);
+
+  // Fetch latest stage + discharge
+  try {
+    const ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&parameterCd=00060,00065,00010&siteStatus=all`;
+    const res = await fetch(ivUrl);
+    const data = await res.json();
+    const series = data?.value?.timeSeries || [];
+    const bits = series.map(ts => {
+      const p = ts.variable?.variableName || ts.variable?.variableCode?.[0]?.value || "param";
+      const unit = ts.variable?.unit?.unitCode || "";
+      const vals = ts.values?.[0]?.value || [];
+      const last = vals[vals.length - 1];
+      if (!last) return null;
+      return `<div><b>${p}</b>: ${last.value} ${unit} <span style="color:var(--text-muted)">@ ${last.dateTime}</span></div>`;
+    }).filter(Boolean);
+    const el = document.getElementById("usgsIvStats");
+    if (el) el.innerHTML = bits.length ? bits.join("") : "No recent instantaneous values";
+  } catch (e) {
+    const el = document.getElementById("usgsIvStats");
+    if (el) el.textContent = "Could not load instantaneous values";
   }
 }
 
