@@ -344,11 +344,13 @@
       </div>
     </div>
 
-    <!-- Hidden legacy watch content target -->
-    <div id="watchContent" class="hidden"></div>
-    <span id="tidePredCount" class="hidden">0</span>
-    <span id="watchStationName" class="hidden"></span>
-    <button id="clearWatch" class="hidden"></button>
+    <!-- Off-DOM utility targets (must not paint) -->
+    <div id="tcx-utilities" aria-hidden="true" style="display:none!important;position:absolute;left:-9999px;height:0;width:0;overflow:hidden">
+      <div id="watchContent"></div>
+      <span id="tidePredCount">0</span>
+      <span id="watchStationName"></span>
+      <button type="button" id="clearWatch" tabindex="-1"></button>
+    </div>
 
   </div>
 

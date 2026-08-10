@@ -469,6 +469,16 @@ function playSolChime() {
 }
 
 // ========== MAP ==========
+
+function scrubBottomChrome() {
+  try {
+    document.querySelectorAll(".leaflet-bottom, .leaflet-control-attribution, .leaflet-control-scale").forEach(el => {
+      el.style.display = "none";
+      el.remove();
+    });
+  } catch (_) {}
+}
+
 function initMap() {
   map = L.map("map", {
     center: [39.0, -75.5], // Mid-Atlantic default bias
@@ -477,7 +487,7 @@ function initMap() {
     attributionControl: false
   });
   // ensure no bottom chrome leaks outside map
-  try { document.querySelectorAll('.leaflet-bottom').forEach(el => { el.style.display = 'none'; }); } catch(_){}
+  scrubBottomChrome(); setTimeout(scrubBottomChrome, 500); setTimeout(scrubBottomChrome, 2000);
 
   // Zoom +/- top-right so they don't cover bottom/left data
   // custom zoom stack only — avoid overlapping Leaflet control
