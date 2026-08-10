@@ -68,6 +68,50 @@ const COASTAL_STATES = [
 
 // ========== INIT ==========
 
+
+function initSplitters() {
+  const root = document.documentElement;
+  const saved = JSON.parse(localStorage.getItem("tcx_layout") || "{}");
+  if (saved.leftW) root.style.setProperty("--left-w", saved.leftW + "px");
+  if (saved.rightW) root.style.setProperty("--right-w", saved.rightW + "px");
+
+  document.querySelectorAll(".splitter-v").forEach(sp => {
+    let dragging = false;
+    sp.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      dragging = true;
+      sp.classList.add("dragging");
+      const which = sp.dataset.split;
+      const onMove = (ev) => {
+        if (!dragging) return;
+        const grid = document.querySelector(".main-grid");
+        if (!grid) return;
+        const rect = grid.getBoundingClientRect();
+        if (which === "left") {
+          const w = Math.min(360, Math.max(160, ev.clientX - rect.left));
+          root.style.setProperty("--left-w", w + "px");
+        } else {
+          const w = Math.min(380, Math.max(180, rect.right - ev.clientX));
+          root.style.setProperty("--right-w", w + "px");
+        }
+        if (map) map.invalidateSize();
+      };
+      const onUp = () => {
+        dragging = false;
+        sp.classList.remove("dragging");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        const lw = parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 220;
+        const rw = parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 240;
+        localStorage.setItem("tcx_layout", JSON.stringify({ leftW: lw, rightW: rw }));
+        if (map) map.invalidateSize();
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
+}
+
 function initCollapsibleSections() {
   document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
     if (hdr.querySelector(".collapse-btn")) return;
@@ -75,14 +119,14 @@ function initCollapsibleSections() {
     btn.type = "button";
     btn.className = "collapse-btn";
     btn.title = "Collapse / expand";
-    btn.textContent = "▾";
+    btn.textContent = ""; btn.setAttribute("aria-label", "Collapse");
     hdr.appendChild(btn);
     const toggle = (e) => {
       e?.stopPropagation?.();
       const sec = hdr.closest(".panel-section");
       if (!sec) return;
       sec.classList.toggle("collapsed");
-      btn.textContent = sec.classList.contains("collapsed") ? "▸" : "▾";
+      btn.setAttribute("aria-expanded", sec.classList.contains("collapsed") ? "false" : "true");
       if (typeof map !== "undefined" && map) setTimeout(() => map.invalidateSize(), 200);
     };
     btn.addEventListener("click", toggle);
@@ -106,6 +150,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (typeof bindNowcoastUI === 'function') bindNowcoastUI();
   if (typeof initCollapsibleSections === 'function') initCollapsibleSections();
   if (typeof initExtraZoomControls === 'function') initExtraZoomControls();
+  if (typeof initSplitters === 'function') initSplitters();
   setTimeout(() => { try { map && map.invalidateSize(); } catch(_){} }, 300);
   await loadStations();
   await loadBuoys();
@@ -194,7 +239,7 @@ function initMap() {
   });
 
   // Zoom +/- top-right so they don't cover bottom/left data
-  L.control.zoom({ position: "topright" }).addTo(map);
+  // custom zoom stack only — avoid overlapping Leaflet control
 
   setBasemap("dark");
 
@@ -1599,6 +1644,50 @@ async function refreshAllWatches() {
 
 // Extend bindUI for new controls (called after DOM ready already bound some)
 
+
+function initSplitters() {
+  const root = document.documentElement;
+  const saved = JSON.parse(localStorage.getItem("tcx_layout") || "{}");
+  if (saved.leftW) root.style.setProperty("--left-w", saved.leftW + "px");
+  if (saved.rightW) root.style.setProperty("--right-w", saved.rightW + "px");
+
+  document.querySelectorAll(".splitter-v").forEach(sp => {
+    let dragging = false;
+    sp.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      dragging = true;
+      sp.classList.add("dragging");
+      const which = sp.dataset.split;
+      const onMove = (ev) => {
+        if (!dragging) return;
+        const grid = document.querySelector(".main-grid");
+        if (!grid) return;
+        const rect = grid.getBoundingClientRect();
+        if (which === "left") {
+          const w = Math.min(360, Math.max(160, ev.clientX - rect.left));
+          root.style.setProperty("--left-w", w + "px");
+        } else {
+          const w = Math.min(380, Math.max(180, rect.right - ev.clientX));
+          root.style.setProperty("--right-w", w + "px");
+        }
+        if (map) map.invalidateSize();
+      };
+      const onUp = () => {
+        dragging = false;
+        sp.classList.remove("dragging");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        const lw = parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 220;
+        const rw = parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 240;
+        localStorage.setItem("tcx_layout", JSON.stringify({ leftW: lw, rightW: rw }));
+        if (map) map.invalidateSize();
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
+}
+
 function initCollapsibleSections() {
   document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
     if (hdr.querySelector(".collapse-btn")) return;
@@ -1606,14 +1695,14 @@ function initCollapsibleSections() {
     btn.type = "button";
     btn.className = "collapse-btn";
     btn.title = "Collapse / expand";
-    btn.textContent = "▾";
+    btn.textContent = ""; btn.setAttribute("aria-label", "Collapse");
     hdr.appendChild(btn);
     const toggle = (e) => {
       e?.stopPropagation?.();
       const sec = hdr.closest(".panel-section");
       if (!sec) return;
       sec.classList.toggle("collapsed");
-      btn.textContent = sec.classList.contains("collapsed") ? "▸" : "▾";
+      btn.setAttribute("aria-expanded", sec.classList.contains("collapsed") ? "false" : "true");
       if (typeof map !== "undefined" && map) setTimeout(() => map.invalidateSize(), 200);
     };
     btn.addEventListener("click", toggle);

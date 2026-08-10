@@ -1853,3 +1853,291 @@ a.nc-embed-btn {
   padding: 4px 8px;
   cursor: pointer;
 }
+
+
+/* ========== MISSION CONTROL LAYOUT v2 ========== */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: #07090c;
+}
+
+.main-grid {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  display: grid !important;
+  grid-template-columns: var(--left-w, 220px) 6px 1fr 6px var(--right-w, 240px) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+}
+
+.left-panel { grid-column: 1; }
+.splitter-v[data-split="left"] { grid-column: 2; }
+.map-container { grid-column: 3; }
+.splitter-v[data-split="right"] { grid-column: 4; }
+.right-panel { grid-column: 5; }
+
+.splitter-v {
+  background: #151a22;
+  cursor: col-resize;
+  position: relative;
+  z-index: 20;
+  transition: background 0.15s;
+}
+.splitter-v:hover,
+.splitter-v.dragging {
+  background: var(--orange);
+}
+.splitter-v::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 28px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 1px;
+}
+
+.left-panel,
+.right-panel {
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #0c0f14;
+  border: none !important;
+}
+
+.map-container {
+  position: relative !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  display: block !important;
+  background: #0a0d12;
+  overflow: hidden;
+}
+#map {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  z-index: 1;
+}
+
+/* Map HUD — non-overlapping zones */
+.map-overlay-top {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 500;
+  display: flex;
+  gap: 10px;
+  pointer-events: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(10,13,18,0.75);
+  border: 1px solid var(--panel-border);
+  padding: 4px 10px;
+  border-radius: 2px;
+}
+
+/* Zoom stack — top RIGHT only */
+.map-zoom-stack {
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  left: auto !important;
+  bottom: auto !important;
+  z-index: 600 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+.map-zoom-stack button {
+  width: 32px !important;
+  height: 32px !important;
+  background: rgba(12, 15, 20, 0.94) !important;
+  border: 1px solid #2a3340 !important;
+  color: #e8ecef !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  border-radius: 2px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.map-zoom-stack button:hover {
+  border-color: var(--orange) !important;
+  color: var(--orange) !important;
+}
+
+/* Tool strip — bottom LEFT, horizontal, never overlaps zoom */
+.map-controls-left {
+  position: absolute !important;
+  left: 10px !important;
+  bottom: 14px !important;
+  top: auto !important;
+  right: auto !important;
+  z-index: 600 !important;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+  max-width: min(520px, 70%) !important;
+  background: rgba(12, 15, 20, 0.9);
+  border: 1px solid #2a3340;
+  padding: 5px;
+  border-radius: 3px;
+}
+.map-controls-left button {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  padding: 5px 8px !important;
+  font-size: 9px !important;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  background: transparent !important;
+  border: 1px solid #2a3340 !important;
+  color: var(--text-dim) !important;
+  border-radius: 2px !important;
+}
+.map-controls-left button:hover,
+.map-controls-left button.active {
+  border-color: var(--orange) !important;
+  color: var(--orange) !important;
+  background: rgba(230,126,34,0.08) !important;
+}
+
+/* Hide Leaflet default zoom — we use custom stack */
+.leaflet-control-zoom {
+  display: none !important;
+}
+
+/* Watch bar — horizontal card grid fills full width */
+.watch-strip {
+  flex: 0 0 auto !important;
+  min-height: 130px !important;
+  max-height: 260px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-top: 1px solid #1e252e !important;
+  background: #0c0f14 !important;
+  overflow: hidden !important;
+}
+.watch-strip-header {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1e252e;
+}
+.watch-strip-body,
+#watchSlots {
+  flex: 1 1 auto !important;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)) !important;
+  gap: 8px !important;
+  padding: 10px 12px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  align-content: start !important;
+}
+.watch-empty {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 12px 4px;
+}
+.watch-card {
+  margin: 0 !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  background: #11161d !important;
+  border: 1px solid #2a3340 !important;
+  border-radius: 3px !important;
+  padding: 8px 10px !important;
+}
+.watch-card.expanded {
+  grid-column: span 2;
+  min-height: 180px;
+}
+
+/* Form controls — mission theme (no white OS chrome) */
+select,
+input[type="text"],
+input[type="search"],
+textarea {
+  background: #0a0d12 !important;
+  color: #e8ecef !important;
+  border: 1px solid #2a3340 !important;
+  border-radius: 2px !important;
+  font-family: var(--font-mono) !important;
+  outline: none !important;
+  color-scheme: dark;
+}
+select:focus,
+input:focus {
+  border-color: var(--orange) !important;
+  box-shadow: 0 0 0 1px rgba(230,126,34,0.25) !important;
+}
+select option {
+  background: #11161d;
+  color: #e8ecef;
+}
+/* Accent selects in watch bar */
+.watch-controls select,
+.watch-controls input {
+  border-color: #3d4a5c !important;
+}
+.watch-controls select:hover,
+.watch-controls input:hover {
+  border-color: var(--orange) !important;
+}
+
+/* Collapse chevrons — professional */
+.section-header .collapse-btn {
+  width: 20px !important;
+  height: 20px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: #5a6a7a !important;
+  font-size: 0 !important;
+  position: relative;
+  border-radius: 2px !important;
+}
+.section-header .collapse-btn::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid #8b9aab;
+  border-bottom: 1.5px solid #8b9aab;
+  transform: translate(-50%, -65%) rotate(45deg);
+  transition: transform 0.15s;
+}
+.panel-section.collapsed .collapse-btn::before {
+  transform: translate(-50%, -35%) rotate(-45deg);
+}
+.section-header .collapse-btn:hover {
+  border-color: #2a3340 !important;
+  background: rgba(255,255,255,0.03) !important;
+}
+.section-header .collapse-btn:hover::before {
+  border-color: var(--orange);
+}
+
+/* Layout toolbar hint */
+.layout-hint {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
