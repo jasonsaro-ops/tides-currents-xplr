@@ -1528,3 +1528,47 @@ a.nc-embed-btn {
 .alert-modal-panel {
   max-width: min(720px, 96vw) !important;
 }
+
+.hydro-panel .hydro-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.hydro-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 3px 0;
+}
+.hydro-item input { accent-color: #1abc9c; }
+.hydro-sub {
+  margin-top: 8px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--orange);
+  font-family: var(--font-display);
+}
+.hydro-note {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.hydro-link {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--orange);
+  text-decoration: none;
+}
+.hydro-link:hover { text-decoration: underline; }
+.marker-cluster-usgs {
+  background: rgba(26, 188, 156, 0.35);
+}
+.marker-cluster-usgs div {
+  background: rgba(26, 188, 156, 0.85);
+  color: #0a0d12;
+  font-weight: 700;
+}

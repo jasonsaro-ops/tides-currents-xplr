@@ -174,8 +174,6 @@
             <label class="nc-layer"><input type="checkbox" data-nc="alerts" /> Active Alerts (CO-OPS coastal)</label>
             <label class="nc-layer"><input type="checkbox" data-nc="convective" /> Convective Outlooks</label>
             <label class="nc-layer"><input type="checkbox" data-nc="federal" /> Federal Boundaries</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="river" /> River Gauges (NWS)</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="usgs" /> USGS Stream Gauges</label>
             <label class="nc-layer"><input type="checkbox" data-nc="zoneForecast" /> Zone Weather Forecasts</label>
             <label class="nc-layer"><input type="checkbox" data-nc="surface_obs" /> Surface Observations</label>
           </div>
@@ -231,9 +229,30 @@
           </div>
           <div class="sources">
             ESRI · TOMTOM · GARMIN · FAO · NOAA · USGS<br />
-            CO-OPS MDAPI · DATA API · PORTS®
+            CO-OPS MDAPI · DATA API · PORTS® · NWIS
           </div>
         </section>
+
+        <section class="panel-section hydro-panel">
+          <div class="section-header">
+            <span class="sec-title">HYDROLOGY // GAUGES</span>
+          </div>
+          <div class="hydro-layers">
+            <label class="hydro-item"><input type="checkbox" data-nc="river" /> NWS River Gauges</label>
+            <div class="hydro-sub">USGS MONITORING</div>
+            <label class="hydro-item"><input type="checkbox" data-usgs="streamflow" /> Streamflow</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="surface" /> Surface-water levels</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="groundwater" /> Groundwater levels</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="springs" /> Spring water levels</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="wq" /> Water quality</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="precip" /> Precipitation</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="atmos" /> Atmospheric</label>
+            <label class="hydro-item"><input type="checkbox" data-usgs="cameras" /> Cameras</label>
+            <div class="hydro-note">Clusters at national zoom · click for charts</div>
+            <a class="hydro-link" href="https://dashboard.waterdata.usgs.gov/app/nwd/en/" target="_blank" rel="noopener">Open USGS National Water Dashboard ↗</a>
+          </div>
+        </section>
+
       </aside>
     </main>
 
