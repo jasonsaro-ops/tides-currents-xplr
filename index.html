@@ -193,6 +193,13 @@
           <div class="coords" id="mapCoords">LAT -- LON --</div>
           <div class="zoom-level" id="zoomLevel">Z --</div>
         </div>
+        <div class="map-zoom-stack">
+          <button type="button" id="zoomInBtn" title="Zoom in">+</button>
+          <button type="button" id="zoomOutBtn" title="Zoom out">−</button>
+          <button type="button" id="zoomWorldBtn" title="World view">🌍</button>
+          <button type="button" id="zoomConusBtn" title="CONUS">US</button>
+          <button type="button" id="zoomRegionBtn" title="Mid-Atlantic">MA</button>
+        </div>
         <div class="map-controls-left">
           <button id="fitUSA" title="Fit USA">⌂ USA</button>
           <button id="resetViewBtn" title="Reset view & filters">↺ RESET VIEW</button>
@@ -252,3 +259,96 @@
             <a class="hydro-link" href="https://dashboard.waterdata.usgs.gov/app/nwd/en/" target="_blank" rel="noopener">USGS National Water Dashboard ↗</a>
           </div>
         </section>
+      </aside>
+    </main>
+
+    <!-- Watch / Realtime strip -->
+    <section class="watch-strip" id="watchPanel">
+      <div class="watch-strip-header">
+        <span class="sec-title">WATCH // REALTIME STATIONS</span>
+        <span class="watch-updated" id="watchUpdated"></span>
+        <div class="watch-controls">
+          <select id="watchStateSelect"><option value="">STATE / TERRITORY</option></select>
+          <select id="watchStationSelect"><option value="">STATION</option></select>
+          <input type="text" id="watchInput" placeholder="or type ID / name..." />
+          <button id="addWatchBtn">ADD</button>
+          <button id="clearWatchBtn">CLEAR</button>
+        </div>
+      </div>
+      <div class="watch-strip-body" id="watchSlots">
+        <div class="watch-empty">Select a state/territory then a station (or type an ID) to monitor in realtime — updates every 2 min, SOL chime on change</div>
+      </div>
+    </section>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Station modal -->
+    <div id="stationModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span class="data-tag">DATA</span>
+            <span id="modalStationName">STATION</span>
+            <span id="modalStationId" class="id-tag"></span>
+          </div>
+          <button class="close-btn" id="closeModal">×</button>
+        </div>
+        <div class="modal-meta">
+          <span id="modalMeta"></span>
+          <span id="modalUpdateTime"></span>
+        </div>
+        <div class="modal-tabs">
+          <button class="tab active" data-tab="latest">LATEST</button>
+          <button class="tab" data-tab="predictions">PREDICTIONS</button>
+          <button class="tab" data-tab="currents">CURRENTS</button>
+          <button class="tab" data-tab="flood">FLOOD RISK</button>
+        </div>
+        <div class="modal-body" id="tabContent"></div>
+        <div class="modal-footer">
+          <button id="showOnMapBtn">SHOW ON MAP</button>
+          <button id="addTideToMapBtn">ADD PRED OVERLAY</button>
+          <button id="watchBtn">WATCH</button>
+          <a id="officialLink" href="#" target="_blank" rel="noopener">NOAA STATION PAGE ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert modal -->
+    <div id="alertModal" class="modal hidden">
+      <div class="modal-panel alert-modal-panel">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title" id="alertModalEvent">ALERT</div>
+            <div class="modal-sub" id="alertModalSeverity"></div>
+          </div>
+          <button class="modal-close" id="closeAlertModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="alertModalArea" class="alert-area"></div>
+          <div id="alertModalHeadline" class="alert-headline"></div>
+          <pre id="alertModalDesc" class="alert-desc"></pre>
+          <div id="alertModalInstr" class="alert-instr"></div>
+          <div id="alertModalMeta" class="alert-meta"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden legacy watch content target -->
+    <div id="watchContent" class="hidden"></div>
+    <span id="tidePredCount" class="hidden">0</span>
+    <span id="watchStationName" class="hidden"></span>
+    <button id="clearWatch" class="hidden"></button>
+
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+  <script src="https://unpkg.com/esri-leaflet-vector@4.2.3/dist/esri-leaflet-vector.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

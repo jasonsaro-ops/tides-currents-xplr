@@ -67,12 +67,46 @@ const COASTAL_STATES = [
 ];
 
 // ========== INIT ==========
+
+function initCollapsibleSections() {
+  document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
+    if (hdr.querySelector(".collapse-btn")) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "collapse-btn";
+    btn.title = "Collapse / expand";
+    btn.textContent = "▾";
+    hdr.appendChild(btn);
+    const toggle = (e) => {
+      e?.stopPropagation?.();
+      const sec = hdr.closest(".panel-section");
+      if (!sec) return;
+      sec.classList.toggle("collapsed");
+      btn.textContent = sec.classList.contains("collapsed") ? "▸" : "▾";
+      if (typeof map !== "undefined" && map) setTimeout(() => map.invalidateSize(), 200);
+    };
+    btn.addEventListener("click", toggle);
+    hdr.addEventListener("dblclick", toggle);
+  });
+}
+
+function initExtraZoomControls() {
+  document.getElementById("zoomInBtn")?.addEventListener("click", () => map?.zoomIn());
+  document.getElementById("zoomOutBtn")?.addEventListener("click", () => map?.zoomOut());
+  document.getElementById("zoomWorldBtn")?.addEventListener("click", () => map?.setView([20, -40], 3));
+  document.getElementById("zoomConusBtn")?.addEventListener("click", () => map?.fitBounds([[24.5, -125], [49.5, -66]]));
+  document.getElementById("zoomRegionBtn")?.addEventListener("click", () => map?.fitBounds([[37.8, -77.5], [41.2, -73.8]]));
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => { if (typeof loadNwsWarnings === 'function') loadNwsWarnings(); }, 5 * 60 * 1000);
   initClock();
   initMap();
   bindUI();
   if (typeof bindNowcoastUI === 'function') bindNowcoastUI();
+  if (typeof initCollapsibleSections === 'function') initCollapsibleSections();
+  if (typeof initExtraZoomControls === 'function') initExtraZoomControls();
+  setTimeout(() => { try { map && map.invalidateSize(); } catch(_){} }, 300);
   await loadStations();
   await loadBuoys();
   await loadTidePredStations();
@@ -1564,6 +1598,37 @@ async function refreshAllWatches() {
 }
 
 // Extend bindUI for new controls (called after DOM ready already bound some)
+
+function initCollapsibleSections() {
+  document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
+    if (hdr.querySelector(".collapse-btn")) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "collapse-btn";
+    btn.title = "Collapse / expand";
+    btn.textContent = "▾";
+    hdr.appendChild(btn);
+    const toggle = (e) => {
+      e?.stopPropagation?.();
+      const sec = hdr.closest(".panel-section");
+      if (!sec) return;
+      sec.classList.toggle("collapsed");
+      btn.textContent = sec.classList.contains("collapsed") ? "▸" : "▾";
+      if (typeof map !== "undefined" && map) setTimeout(() => map.invalidateSize(), 200);
+    };
+    btn.addEventListener("click", toggle);
+    hdr.addEventListener("dblclick", toggle);
+  });
+}
+
+function initExtraZoomControls() {
+  document.getElementById("zoomInBtn")?.addEventListener("click", () => map?.zoomIn());
+  document.getElementById("zoomOutBtn")?.addEventListener("click", () => map?.zoomOut());
+  document.getElementById("zoomWorldBtn")?.addEventListener("click", () => map?.setView([20, -40], 3));
+  document.getElementById("zoomConusBtn")?.addEventListener("click", () => map?.fitBounds([[24.5, -125], [49.5, -66]]));
+  document.getElementById("zoomRegionBtn")?.addEventListener("click", () => map?.fitBounds([[37.8, -77.5], [41.2, -73.8]]));
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   setTimeout(() => {
     const st = document.getElementById("soundToggle");
