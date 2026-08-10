@@ -1,43 +1,28 @@
 # TIDES & CURRENTS XPLR
 
-Mission-control dashboard for NOAA Tides & Currents, PORTS®, NDBC buoys, NWS alerts, nowCOAST layers, and USGS gauges.
+Professional NOAA tides, currents, buoys, and hydrology dashboard.
 
-## Docking layout (FlexLayout-style)
+## Layout
 
-Built on **Golden Layout** (drag / drop / snap / stack / dock):
+Three-column mission layout:
 
-- **Drag tab headers** to move panels
-- **Drop on edges** to split rows/columns
-- **Drop on center** to stack as tabs
-- **Pop-out icon** on a tab → native browser window
-- **Maximise** a panel for focus view
-- Splitters between regions are resizable
+| Column | Content |
+|--------|---------|
+| **Left** | Filters, legend, basemap, NWS alerts, nowCOAST layers |
+| **Center** | Interactive map + zoom/tools |
+| **Right** | Realtime stations, quick states, USGS/NWS gauges |
+| **Bottom** | Watch strip — multi-station realtime cards |
 
-### Layout JSON
+Drag the vertical gutters to resize side panels. Double-click section headers to collapse.
 
-| Control | Action |
-|---------|--------|
-| **SAVE LAYOUT** | Persist docking tree to `localStorage` |
-| **LOAD LAYOUT** | Restore saved tree (right-click → import file) |
-| **EXPORT** | Download layout JSON |
-| **RESET LAYOUT** | Default mission-control arrangement |
+## Data flow
 
-Programmatic API:
+1. **Filters / state** (left) → filters map markers  
+2. **Map click** → station modal → optional **WATCH**  
+3. **Watch bar** polls every 2 minutes (SOL chime on change)  
+4. **Right realtime** shows mid-Atlantic / PORTS highlights  
+5. **Hydrology** toggles NWS + USGS gauge layers on the map  
 
-```js
-tcxLayout.save()
-tcxLayout.export()
-tcxLayout.reset()
-tcxLayout.toJSON()
-tcxLayout.load(configObject)
-```
+## Host
 
-Default tree: left stack (Filters / Legend / Basemap / Alerts / nowCOAST) · Map · right stack (Realtime / States / Hydrology / Sources) · bottom Watch strip.
-
-## Data sources
-
-NOAA CO-OPS MDAPI + Data API · PORTS® · NDBC · NWS alerts · nowCOAST WMS · USGS OGC monitoring locations · NWPS gauges
-
-## Host on GitHub Pages
-
-Push the folder contents (`index.html`, `app.js`, `layout.js`, `styles.css`) to a Pages branch. Open `index.html` as the site root.
+Static files for GitHub Pages: `index.html`, `app.js`, `styles.css`.

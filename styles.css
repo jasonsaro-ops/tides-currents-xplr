@@ -2342,5 +2342,255 @@ body::after {
 }
 
 /* Hide old grid-only chrome when docking is active */
-.main-grid { display: none !important; }
-.splitter-v { display: none !important; }
+/* main-grid restored */
+/* splitters restored */
+
+
+/* ========== CLEAN 3-COLUMN MISSION LAYOUT ========== */
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #07090c;
+}
+#app {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+.top-bar {
+  flex: 0 0 auto !important;
+  z-index: 100;
+}
+.main-grid {
+  display: grid !important;
+  grid-template-columns: var(--left-w, 240px) 5px 1fr 5px var(--right-w, 260px) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  width: 100% !important;
+}
+.left-panel { grid-column: 1; min-width: 0; }
+.splitter-v[data-split="left"] { grid-column: 2; }
+.map-container, #mapColumn { grid-column: 3; min-width: 0; }
+.splitter-v[data-split="right"] { grid-column: 4; }
+.right-panel { grid-column: 5; min-width: 0; }
+
+.left-panel,
+.right-panel {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  background: #0c0f14 !important;
+  border: none !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+.left-panel { border-right: 1px solid #1e252e !important; }
+.right-panel { border-left: 1px solid #1e252e !important; }
+
+.panel-section {
+  flex: 0 0 auto;
+  padding: 10px 12px !important;
+  border-bottom: 1px solid #1e252e !important;
+  margin: 0 !important;
+}
+.panel-section .sec-title {
+  font-size: 10px !important;
+  letter-spacing: 0.12em !important;
+  color: #e67e22 !important;
+}
+
+.map-container, #mapColumn {
+  position: relative !important;
+  background: #0a0d12 !important;
+  overflow: hidden !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+#map {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1 !important;
+}
+
+/* Map HUD zones — no overlap */
+.map-overlay-top {
+  position: absolute !important;
+  top: 10px !important;
+  left: 10px !important;
+  right: auto !important;
+  z-index: 500 !important;
+  pointer-events: none;
+  display: flex;
+  gap: 10px;
+  background: rgba(12,15,20,0.85);
+  border: 1px solid #2a3340;
+  padding: 4px 10px;
+  border-radius: 2px;
+  font-size: 11px;
+  color: #8b9aab;
+}
+.map-zoom-stack {
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  left: auto !important;
+  bottom: auto !important;
+  z-index: 600 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+.map-zoom-stack button {
+  width: 32px !important;
+  height: 32px !important;
+  background: rgba(12,15,20,0.94) !important;
+  border: 1px solid #2a3340 !important;
+  color: #e8ecef !important;
+  cursor: pointer;
+  border-radius: 2px;
+  font-weight: 700;
+}
+.map-zoom-stack button:hover {
+  border-color: #e67e22 !important;
+  color: #e67e22 !important;
+}
+.map-controls-left {
+  position: absolute !important;
+  left: 10px !important;
+  bottom: 12px !important;
+  top: auto !important;
+  right: auto !important;
+  z-index: 600 !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+  max-width: 70% !important;
+  background: rgba(12,15,20,0.92) !important;
+  border: 1px solid #2a3340 !important;
+  padding: 5px !important;
+  border-radius: 3px !important;
+}
+.map-controls-left button {
+  padding: 5px 8px !important;
+  font-size: 9px !important;
+  letter-spacing: 0.04em;
+  background: transparent !important;
+  border: 1px solid #2a3340 !important;
+  color: #8b9aab !important;
+  cursor: pointer;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.map-controls-left button:hover,
+.map-controls-left button.active {
+  border-color: #e67e22 !important;
+  color: #e67e22 !important;
+}
+
+.splitter-v {
+  background: #151a22 !important;
+  cursor: col-resize !important;
+  z-index: 30;
+}
+.splitter-v:hover,
+.splitter-v.dragging {
+  background: #e67e22 !important;
+}
+
+/* Watch bar */
+.watch-strip {
+  flex: 0 0 auto !important;
+  min-height: 140px !important;
+  max-height: 240px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-top: 1px solid #1e252e !important;
+  background: #0c0f14 !important;
+  overflow: hidden !important;
+  z-index: 40;
+}
+.watch-strip-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1e252e;
+}
+#watchSlots,
+.watch-strip-body {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)) !important;
+  gap: 8px !important;
+  padding: 10px 12px !important;
+  overflow: auto !important;
+  flex: 1 1 auto !important;
+  align-content: start !important;
+}
+
+/* Layer lists — consistent */
+.nc-layer,
+.hydro-item {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 2px !important;
+  font-size: 11px !important;
+  color: #8b9aab;
+  cursor: pointer;
+}
+.nc-layer:hover,
+.hydro-item:hover {
+  color: #e8ecef;
+  background: rgba(255,255,255,0.03);
+}
+.hydro-layers {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1px !important;
+}
+
+/* Forms dark */
+select, input[type="text"], input[type="search"] {
+  background: #0a0d12 !important;
+  color: #e8ecef !important;
+  border: 1px solid #2a3340 !important;
+  border-radius: 2px !important;
+  color-scheme: dark;
+}
+select:focus, input:focus {
+  border-color: #e67e22 !important;
+}
+
+/* Hide GL leftovers */
+.gl-root, #glRoot, #panelStore, .lm_goldenlayout {
+  display: none !important;
+}
+.leaflet-control-attribution,
+.leaflet-bottom {
+  display: none !important;
+}
+.hidden {
+  display: none !important;
+}
+
+/* Active list denser */
+.active-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+.quick-states {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 3px !important;
+}
