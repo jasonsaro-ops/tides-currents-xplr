@@ -382,6 +382,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => { if (typeof loadNwsWarnings === 'function') loadNwsWarnings(); }, 5 * 60 * 1000);
   initClock();
   initMap();
+  if (typeof initRainViewer === 'function') initRainViewer();
   bindUI();
   if (typeof bindNowcoastUI === 'function') bindNowcoastUI();
   if (typeof initCollapsibleSections === 'function') initCollapsibleSections();
@@ -728,6 +729,8 @@ function renderMarkers() {
   else markersLayer = group;
 
   document.getElementById("stationCount").textContent = stations.length;
+  const _sb = document.getElementById("stationBadge");
+  if (_sb) _sb.textContent = String(stations.length);
 }
 
 function applyFilters() {
@@ -1530,6 +1533,8 @@ async function loadBuoys() {
     }
     const el = document.getElementById("buoyCount");
     if (el) el.textContent = String(buoyStations.length);
+    const bb = document.getElementById("buoyBadge");
+    if (bb) bb.textContent = String(buoyStations.length);
     console.log("Loaded", buoyStations.length, "NDBC buoys (US filter)");
     renderBuoyMarkers();
   } catch (e) {
@@ -2567,15 +2572,172 @@ function removeNc(key) {
   ncLayerState[key] = null;
 }
 
-async function initRainViewer() {
-  try {
-    const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
-    const data = await res.json();
-    rainViewerHost = data.host || rainViewerHost;
-    const past = data.radar?.past || [];
-    if (past.length) rainViewerRadarPath = past[past.length - 1].path;
-  } catch (_) {}
+
+// ========== NEXRAD / RainViewer animated radar ==========
+const radarPlayer = {
+  host: "https://tilecache.rainviewer.com",
+  frames: [], // { time, path }
+  index: 0,
+  playing: false,
+  timer: null,
+  layer: null,
+  speed: 3, // 1..8
+  opacity: 0.7
+};
+
+async function fetchRadarFrames() {
+  const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+  const data = await res.json();
+  radarPlayer.host = data.host || radarPlayer.host;
+  rainViewerHost = radarPlayer.host;
+  const past = data.radar?.past || [];
+  const nowcast = data.radar?.nowcast || [];
+  radarPlayer.frames = [...past, ...nowcast];
+  if (radarPlayer.frames.length) {
+    radarPlayer.index = Math.max(0, past.length - 1);
+    rainViewerRadarPath = radarPlayer.frames[radarPlayer.index].path;
+  }
+  return radarPlayer.frames.length;
 }
+
+function radarTileUrl(path) {
+  // color scheme 2, smooth 1, snow 1
+  return `${radarPlayer.host}${path}/256/{z}/{x}/{y}/2/1_1.png`;
+}
+
+function showRadarFrame(i) {
+  if (!map || !radarPlayer.frames.length) return;
+  radarPlayer.index = ((i % radarPlayer.frames.length) + radarPlayer.frames.length) % radarPlayer.frames.length;
+  const frame = radarPlayer.frames[radarPlayer.index];
+  const url = radarTileUrl(frame.path);
+  if (radarPlayer.layer) {
+    try { map.removeLayer(radarPlayer.layer); } catch (_) {}
+  }
+  radarPlayer.layer = L.tileLayer(url, {
+    opacity: radarPlayer.opacity,
+    zIndex: 450,
+    maxZoom: 12,
+    attribution: "RainViewer · NEXRAD"
+  });
+  radarPlayer.layer.addTo(map);
+  ncLayerState.radar = radarPlayer.layer;
+
+  const t = new Date(frame.time * 1000);
+  const iso = t.toISOString().replace("T", " ").substr(0, 19) + "Z";
+  const fl = document.getElementById("radarFrameLabel");
+  const tl = document.getElementById("radarTimeLabel");
+  const hud = document.getElementById("radarHudTime");
+  if (fl) fl.textContent = `FRAME ${radarPlayer.index + 1}/${radarPlayer.frames.length}`;
+  if (tl) tl.textContent = iso;
+  if (hud) hud.textContent = `RADAR ${iso}`;
+}
+
+function radarPlayIntervalMs() {
+  // speed 1 = slow (1200ms), 8 = fast (150ms)
+  const s = Math.max(1, Math.min(8, radarPlayer.speed || 3));
+  return Math.round(1200 - (s - 1) * (1050 / 7));
+}
+
+function stopRadarPlayback() {
+  radarPlayer.playing = false;
+  if (radarPlayer.timer) {
+    clearInterval(radarPlayer.timer);
+    radarPlayer.timer = null;
+  }
+  document.getElementById("radarPlayBtn")?.classList.remove("active");
+  const pb = document.getElementById("radarPlayBtn");
+  if (pb) pb.textContent = "▶";
+  const hb = document.getElementById("radarHudPlay");
+  if (hb) hb.textContent = "▶";
+}
+
+function startRadarPlayback() {
+  if (!radarPlayer.frames.length) return;
+  stopRadarPlayback();
+  radarPlayer.playing = true;
+  const pb = document.getElementById("radarPlayBtn");
+  if (pb) { pb.textContent = "❚❚"; pb.classList.add("active"); }
+  const hb = document.getElementById("radarHudPlay");
+  if (hb) hb.textContent = "❚❚";
+  radarPlayer.timer = setInterval(() => {
+    showRadarFrame(radarPlayer.index + 1);
+  }, radarPlayIntervalMs());
+}
+
+function toggleRadarPlayback() {
+  if (radarPlayer.playing) stopRadarPlayback();
+  else startRadarPlayback();
+}
+
+async function enableRadarLayer() {
+  document.getElementById("radarControls")?.classList.remove("hidden");
+  document.getElementById("radarHud")?.classList.remove("hidden");
+  try {
+    const n = await fetchRadarFrames();
+    if (!n) {
+      // fallback nowCOAST WMS static mosaic
+      ncLayerState.radar = makeWmsLayer("weather_radar:base_reflectivity_mosaic", {
+        opacity: radarPlayer.opacity,
+        zIndex: 450
+      });
+      ncLayerState.radar.addTo(map);
+      showToast("Radar WMS ON (animation unavailable)");
+      return;
+    }
+    showRadarFrame(radarPlayer.index);
+    startRadarPlayback();
+    showToast(`Radar ON — ${n} NEXRAD frames`);
+  } catch (e) {
+    console.warn(e);
+    showToast("Radar load failed");
+  }
+}
+
+function disableRadarLayer() {
+  stopRadarPlayback();
+  if (radarPlayer.layer) {
+    try { map.removeLayer(radarPlayer.layer); } catch (_) {}
+    radarPlayer.layer = null;
+  }
+  removeNc("radar");
+  document.getElementById("radarControls")?.classList.add("hidden");
+  document.getElementById("radarHud")?.classList.add("hidden");
+}
+
+function bindRadarControls() {
+  document.getElementById("radarPlayBtn")?.addEventListener("click", toggleRadarPlayback);
+  document.getElementById("radarHudPlay")?.addEventListener("click", toggleRadarPlayback);
+  document.getElementById("radarPrevBtn")?.addEventListener("click", () => {
+    stopRadarPlayback();
+    showRadarFrame(radarPlayer.index - 1);
+  });
+  document.getElementById("radarNextBtn")?.addEventListener("click", () => {
+    stopRadarPlayback();
+    showRadarFrame(radarPlayer.index + 1);
+  });
+  document.getElementById("radarRefreshBtn")?.addEventListener("click", async () => {
+    const wasPlaying = radarPlayer.playing;
+    stopRadarPlayback();
+    await fetchRadarFrames();
+    showRadarFrame(radarPlayer.frames.length - 1);
+    if (wasPlaying) startRadarPlayback();
+    showToast("Radar frames refreshed");
+  });
+  document.getElementById("radarSpeed")?.addEventListener("input", (e) => {
+    radarPlayer.speed = parseInt(e.target.value, 10) || 3;
+    if (radarPlayer.playing) startRadarPlayback();
+  });
+  document.getElementById("radarOpacity")?.addEventListener("input", (e) => {
+    radarPlayer.opacity = (parseInt(e.target.value, 10) || 70) / 100;
+    if (radarPlayer.layer?.setOpacity) radarPlayer.layer.setOpacity(radarPlayer.opacity);
+  });
+}
+
+async function initRainViewer() {
+  try { await fetchRadarFrames(); } catch (_) {}
+  bindRadarControls();
+}
+
 
 function openLayerDetail(title, html) {
   const modal = document.getElementById("alertModal");
@@ -2697,6 +2859,15 @@ function bindNcIdentify() {
 
 function toggleNcLayer(key, on) {
   if (!map) return;
+
+  if (key === "radar") {
+    if (on) enableRadarLayer();
+    else {
+      disableRadarLayer();
+      showToast("Radar OFF");
+    }
+    return;
+  }
 
   if (key === "alerts") {
     showWarnings = on;

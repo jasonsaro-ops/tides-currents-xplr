@@ -33,8 +33,20 @@
         <button type="button" id="searchBtn" title="Search">⌕</button>
       </div>
       <div class="status-section">
-        <div class="status-item"><span class="label">STATIONS</span><span class="value" id="stationCount">--</span></div>
-        <div class="status-item"><span class="label">BUOYS</span><span class="value" id="buoyCount">--</span></div>
+        <div class="status-item status-badge-wrap">
+          <span class="label">STATIONS</span>
+          <span class="value-row">
+            <span class="value" id="stationCount">--</span>
+            <span class="count-badge" id="stationBadge" title="Loaded stations">0</span>
+          </span>
+        </div>
+        <div class="status-item status-badge-wrap">
+          <span class="label">BUOYS</span>
+          <span class="value-row">
+            <span class="value" id="buoyCount">--</span>
+            <span class="count-badge badge-cyan" id="buoyBadge" title="Active buoys">0</span>
+          </span>
+        </div>
         <div class="status-item"><span class="label">UTC</span><span class="value" id="utcClock">--:--:--</span></div>
         <div class="status-item"><button type="button" id="soundToggle" class="sound-btn" title="Toggle SOL chime">🔊 SOUND ON</button></div>
         <div class="status-item live"><span class="pulse"></span><span class="label">LIVE</span></div>
@@ -156,7 +168,26 @@
             <label class="nc-layer"><input type="checkbox" data-nc="tropical_nc" /> Tropical Cyclones</label>
             <label class="nc-layer"><input type="checkbox" data-nc="vlm" /> Vertical Land Motion</label>
             <label class="nc-layer"><input type="checkbox" data-nc="waterlevels_nc" /> Water Levels</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="radar" /> Weather Radar</label>
+            <label class="nc-layer"><input type="checkbox" data-nc="radar" /> Weather Radar (NEXRAD / RainViewer)</label>
+            <div id="radarControls" class="radar-controls hidden">
+              <div class="radar-controls-row">
+                <button type="button" id="radarPlayBtn" title="Play / Pause">▶</button>
+                <button type="button" id="radarPrevBtn" title="Previous frame">‹</button>
+                <button type="button" id="radarNextBtn" title="Next frame">›</button>
+                <button type="button" id="radarRefreshBtn" title="Refresh frames">↻</button>
+              </div>
+              <div class="radar-controls-row">
+                <label>SPEED <input type="range" id="radarSpeed" min="1" max="8" value="3" /></label>
+              </div>
+              <div class="radar-controls-row">
+                <label>OPACITY <input type="range" id="radarOpacity" min="20" max="100" value="70" /></label>
+              </div>
+              <div class="radar-meta">
+                <span id="radarFrameLabel">FRAME —</span>
+                <span id="radarTimeLabel">—</span>
+              </div>
+              <div class="radar-note">Animated NEXRAD mosaic via RainViewer · NOAA base reflectivity available via nowCOAST WMS</div>
+            </div>
             <label class="nc-layer"><input type="checkbox" data-nc="satellite" /> Weather Satellite</label>
             <label class="nc-layer"><input type="checkbox" data-nc="nautical" /> Nautical Charts</label>
             <label class="nc-layer"><input type="checkbox" data-nc="alerts" /> Active Alerts (CO-OPS coastal)</label>
@@ -187,6 +218,10 @@
           <button type="button" id="zoomWorldBtn" title="World view">🌍</button>
           <button type="button" id="zoomConusBtn" title="CONUS">US</button>
           <button type="button" id="zoomRegionBtn" title="Zoom to Mid-Atlantic (NJ/PA/DE/MD)">MID</button>
+        </div>
+        <div id="radarHud" class="radar-hud hidden">
+          <span id="radarHudTime">RADAR</span>
+          <button type="button" id="radarHudPlay" title="Play/Pause">▶</button>
         </div>
         <div class="map-controls-left">
           <button id="fitUSA" title="Fit USA">⌂ USA</button>
