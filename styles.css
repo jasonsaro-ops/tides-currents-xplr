@@ -3180,3 +3180,56 @@ button.logo-mark:active {
 .right-panel .active-card {
   padding: 9px 11px !important;
 }
+
+
+/* ========== ACTIVE LIST FILLS RIGHT COLUMN ========== */
+.right-panel {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  overflow: hidden !important; /* section scrolls internally */
+}
+.right-panel > .panel-section {
+  flex: 0 0 auto !important;
+}
+.right-panel > .active-section {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding-bottom: 6px !important;
+}
+.right-panel > .active-section .section-header {
+  flex: 0 0 auto !important;
+}
+.right-panel > .active-section .active-list {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  height: 100% !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  padding-right: 4px !important;
+}
+.right-panel .active-card,
+.right-panel .active-item {
+  flex: 0 0 auto !important;
+  margin: 0 !important;
+}
+.right-panel .active-section-header {
+  flex: 0 0 auto;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--orange);
+  padding: 6px 2px 2px;
+  margin-top: 2px;
+}
+/* Compact cards so more fit on screen */
+.right-panel .active-item,
+.right-panel .active-card {
+  padding: 7px 9px !important;
+}

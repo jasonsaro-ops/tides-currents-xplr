@@ -54,9 +54,14 @@ const MID_ATLANTIC_PRIORITY = [
 // Broader highlight pool
 const HIGHLIGHT_IDS = [
   ...MID_ATLANTIC_PRIORITY,
+  // Major coastal / PORTS highlights for active feed
   "9414290", "8518750", "8723214", "9447130", "8761724",
   "8452660", "1612340", "9414750", "8771450", "9410840",
-  "8726520", "8665530", "8443970", "8729840", "8760922"
+  "8726520", "8665530", "8443970", "8729840", "8760922",
+  "8531680", "8510560", "8461490", "8418150", "8639348",
+  "8651370", "8656483", "8670870", "8724580", "8725110",
+  "8735180", "8762482", "8775870", "9410230", "9439040",
+  "9444900", "9450460", "1617760", "9751639", "9755371"
 ];
 
 // All US coastal + Great Lakes + territories for Quick States
@@ -749,7 +754,7 @@ async function loadActivePanel(isAuto = false) {
     .map((id) => allStations.find((s) => s.id === id))
     .filter(Boolean);
 
-  const toFetch = [...mid, ...rest].slice(0, 18);
+  const toFetch = [...mid, ...rest].slice(0, 42);
   if (!toFetch.length) {
     list.innerHTML = `<div class="loading">No stations loaded yet</div>`;
     return;
