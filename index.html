@@ -199,7 +199,7 @@
           <button type="button" id="zoomOutBtn" title="Zoom out">−</button>
           <button type="button" id="zoomWorldBtn" title="World view">🌍</button>
           <button type="button" id="zoomConusBtn" title="CONUS">US</button>
-          <button type="button" id="zoomRegionBtn" title="Mid-Atlantic">MA</button>
+          <button type="button" id="zoomRegionBtn" title="Zoom to Mid-Atlantic (NJ/PA/DE/MD)">MID</button>
         </div>
         <div class="map-controls-left">
           <button id="fitUSA" title="Fit USA">⌂ USA</button>
@@ -240,6 +240,13 @@
             ESRI · TOMTOM · GARMIN · FAO · NOAA · USGS<br />
             CO-OPS MDAPI · DATA API · PORTS® · NWIS
           </div>
+          <div class="layout-bar">
+            <button type="button" id="saveLayoutBtn" title="Save workspace JSON">SAVE LAYOUT</button>
+            <button type="button" id="loadLayoutBtn" title="Load workspace JSON">LOAD LAYOUT</button>
+            <button type="button" id="exportLayoutBtn" title="Download layout JSON file">EXPORT JSON</button>
+            <button type="button" id="resetLayoutBtn" title="Reset panel sizes">RESET LAYOUT</button>
+          </div>
+          <input type="file" id="layoutFileInput" accept="application/json,.json" hidden />
         </section>
 
         <section class="panel-section hydro-panel">
@@ -311,6 +318,7 @@
           <button id="showOnMapBtn">SHOW ON MAP</button>
           <button id="addTideToMapBtn">ADD PRED OVERLAY</button>
           <button id="watchBtn">WATCH</button>
+          <button id="popoutStationBtn">POP OUT</button>
           <a id="officialLink" href="#" target="_blank" rel="noopener">NOAA STATION PAGE ↗</a>
         </div>
       </div>

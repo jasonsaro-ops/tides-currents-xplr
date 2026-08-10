@@ -112,6 +112,235 @@ function initSplitters() {
   });
 }
 
+
+// ========== LAYOUT JSON SERIALIZATION ==========
+function collectLayoutState() {
+  const root = document.documentElement;
+  const collapsed = {};
+  document.querySelectorAll(".panel-section").forEach((sec, i) => {
+    const title = sec.querySelector(".sec-title")?.textContent?.trim() || ("sec_" + i);
+    collapsed[title] = sec.classList.contains("collapsed");
+  });
+  const nc = {};
+  document.querySelectorAll("input[data-nc]").forEach(cb => {
+    nc[cb.dataset.nc] = !!cb.checked;
+  });
+  const usgs = {};
+  document.querySelectorAll("input[data-usgs]").forEach(cb => {
+    usgs[cb.dataset.usgs] = !!cb.checked;
+  });
+  const center = map ? map.getCenter() : null;
+  return {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    panels: {
+      leftW: parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 220,
+      rightW: parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 240
+    },
+    collapsed,
+    basemap: document.querySelector(".bm-btn.active")?.dataset?.bm || "dark",
+    map: center ? { lat: center.lat, lng: center.lng, zoom: map.getZoom() } : null,
+    layers: { nc, usgs },
+    watches: (typeof watchedList !== "undefined" ? watchedList : []).map(w => ({
+      id: w.id, name: w.name, type: w.type, state: w.state
+    })),
+    soundOn: document.getElementById("soundToggle")?.textContent?.includes("ON") ?? true
+  };
+}
+
+function applyLayoutState(state) {
+  if (!state || typeof state !== "object") return;
+  const root = document.documentElement;
+  if (state.panels?.leftW) root.style.setProperty("--left-w", state.panels.leftW + "px");
+  if (state.panels?.rightW) root.style.setProperty("--right-w", state.panels.rightW + "px");
+
+  if (state.collapsed) {
+    document.querySelectorAll(".panel-section").forEach((sec) => {
+      const title = sec.querySelector(".sec-title")?.textContent?.trim();
+      if (title && state.collapsed[title]) sec.classList.add("collapsed");
+      else sec.classList.remove("collapsed");
+    });
+  }
+
+  if (state.basemap && typeof setBasemap === "function") {
+    try { setBasemap(state.basemap); } catch (_) {}
+  }
+
+  if (state.map && map) {
+    map.setView([state.map.lat, state.map.lng], state.map.zoom || 6);
+  }
+
+  if (state.layers?.nc) {
+    Object.entries(state.layers.nc).forEach(([k, on]) => {
+      const cb = document.querySelector(`input[data-nc="${k}"]`);
+      if (cb && cb.checked !== !!on) {
+        cb.checked = !!on;
+        cb.dispatchEvent(new Event("change"));
+      }
+    });
+  }
+  if (state.layers?.usgs) {
+    Object.entries(state.layers.usgs).forEach(([k, on]) => {
+      const cb = document.querySelector(`input[data-usgs="${k}"]`);
+      if (cb && cb.checked !== !!on) {
+        cb.checked = !!on;
+        cb.dispatchEvent(new Event("change"));
+      }
+    });
+  }
+
+  if (Array.isArray(state.watches) && typeof watchedList !== "undefined") {
+    // restore watch list ids — soft add if not present
+    state.watches.forEach(w => {
+      if (!watchedList.find(x => x.id === w.id)) {
+        watchedList.push({ id: w.id, name: w.name, type: w.type || "waterlevels", state: w.state, data: {}, expanded: false });
+      }
+    });
+    if (typeof renderWatchSlots === "function") renderWatchSlots();
+    if (typeof refreshAllWatches === "function") refreshAllWatches();
+  }
+
+  localStorage.setItem("tcx_layout", JSON.stringify({
+    leftW: state.panels?.leftW,
+    rightW: state.panels?.rightW,
+    full: state
+  }));
+  if (map) setTimeout(() => map.invalidateSize(), 200);
+  showToast("Layout applied");
+}
+
+function saveLayoutToStorage() {
+  const state = collectLayoutState();
+  localStorage.setItem("tcx_layout_full", JSON.stringify(state));
+  localStorage.setItem("tcx_layout", JSON.stringify({
+    leftW: state.panels.leftW,
+    rightW: state.panels.rightW,
+    full: state
+  }));
+  showToast("Workspace saved");
+}
+
+function loadLayoutFromStorage() {
+  try {
+    const raw = localStorage.getItem("tcx_layout_full") || localStorage.getItem("tcx_layout");
+    if (!raw) { showToast("No saved layout"); return; }
+    const parsed = JSON.parse(raw);
+    applyLayoutState(parsed.full || parsed);
+  } catch (e) {
+    showToast("Load failed");
+  }
+}
+
+function exportLayoutJson() {
+  const state = collectLayoutState();
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `tides-currents-xplr-layout-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast("Layout JSON exported");
+}
+
+function resetLayout() {
+  document.documentElement.style.setProperty("--left-w", "220px");
+  document.documentElement.style.setProperty("--right-w", "240px");
+  document.querySelectorAll(".panel-section.collapsed").forEach(s => s.classList.remove("collapsed"));
+  localStorage.removeItem("tcx_layout");
+  localStorage.removeItem("tcx_layout_full");
+  if (map) map.invalidateSize();
+  showToast("Layout reset");
+}
+
+function bindLayoutUI() {
+  document.getElementById("saveLayoutBtn")?.addEventListener("click", saveLayoutToStorage);
+  document.getElementById("loadLayoutBtn")?.addEventListener("click", loadLayoutFromStorage);
+  document.getElementById("exportLayoutBtn")?.addEventListener("click", exportLayoutJson);
+  document.getElementById("resetLayoutBtn")?.addEventListener("click", resetLayout);
+  document.getElementById("layoutFileInput")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      applyLayoutState(JSON.parse(text));
+    } catch (_) {
+      showToast("Invalid layout file");
+    }
+    e.target.value = "";
+  });
+  // LOAD also offers file if shift-click
+  document.getElementById("loadLayoutBtn")?.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    document.getElementById("layoutFileInput")?.click();
+  });
+}
+
+// ========== POPOUT WINDOWS ==========
+const popoutWindows = {};
+
+function openPopoutWindow(key, title, htmlBody, width = 480, height = 640) {
+  try {
+    if (popoutWindows[key] && !popoutWindows[key].closed) {
+      popoutWindows[key].focus();
+      return popoutWindows[key];
+    }
+  } catch (_) {}
+
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<title>${title.replace(/</g, "")}</title>
+<style>
+  body{margin:0;background:#0a0c0f;color:#e8ecef;font-family:"Share Tech Mono",monospace;font-size:12px;padding:12px}
+  h1{font-size:14px;color:#e67e22;margin:0 0 10px;letter-spacing:0.08em}
+  a{color:#e67e22}
+  .meta{color:#8b9aab;margin-bottom:10px}
+  pre{white-space:pre-wrap;background:#11161d;padding:10px;border:1px solid #1e252e}
+  iframe{width:100%;height:280px;border:1px solid #2a3340;background:#fff}
+</style></head><body>
+<h1>${title.replace(/</g, "")}</h1>
+${htmlBody}
+</body></html>`;
+
+  const win = window.open("", `tcx_${key}`, `width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no`);
+  if (!win) {
+    showToast("Pop-out blocked — allow pop-ups for this site");
+    return null;
+  }
+  win.document.write(doc);
+  win.document.close();
+  popoutWindows[key] = win;
+  return win;
+}
+
+function popoutStation(station) {
+  if (!station) return;
+  const id = station.id || station;
+  const name = station.name || id;
+  const html = `
+    <div class="meta">Station ${id}</div>
+    <p><a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${id}" target="_blank">NOAA station page ↗</a></p>
+    <p><a href="https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${id}" target="_blank">Tide predictions ↗</a></p>
+    <iframe src="https://tidesandcurrents.noaa.gov/stationhome.html?id=${id}" title="NOAA"></iframe>
+    <p style="color:#5a6a7a;font-size:10px;margin-top:8px">Live charts may be limited by NOAA framing. Use links above if embed is blank.</p>
+  `;
+  openPopoutWindow("st_" + id, `STATION // ${name}`, html, 520, 700);
+}
+
+function popoutWatchCard(w) {
+  if (!w) return;
+  const d = w.data || {};
+  const vals = d.v != null ? `${d.v} ft` : (d.s != null ? `${d.s} kn` : "—");
+  const html = `
+    <div class="meta">${w.type || "station"} · ${w.state || ""}</div>
+    <pre>Latest: ${vals}
+Updated: ${w.updated || "—"}
+ID: ${w.id}</pre>
+    <p><a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${w.id}" target="_blank">Open NOAA page ↗</a></p>
+    <button onclick="window.opener && window.opener.focus()">Back to dashboard</button>
+  `;
+  openPopoutWindow("watch_" + w.id, `WATCH // ${w.name || w.id}`, html, 420, 480);
+}
+
+
 function initCollapsibleSections() {
   document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
     if (hdr.querySelector(".collapse-btn")) return;
@@ -151,6 +380,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (typeof initCollapsibleSections === 'function') initCollapsibleSections();
   if (typeof initExtraZoomControls === 'function') initExtraZoomControls();
   if (typeof initSplitters === 'function') initSplitters();
+  if (typeof bindLayoutUI === 'function') bindLayoutUI();
+  // auto-restore full layout if present
+  try {
+    const raw = localStorage.getItem('tcx_layout_full');
+    if (raw) { /* apply after data load */ window.__tcxPendingLayout = JSON.parse(raw); }
+  } catch(_){}
+
   setTimeout(() => { try { map && map.invalidateSize(); } catch(_){} }, 300);
   await loadStations();
   await loadBuoys();
@@ -158,6 +394,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadNwsWarnings();
   populateFilters();
   populateWatchDropdowns();
+  if (window.__tcxPendingLayout && typeof applyLayoutState === 'function') {
+    setTimeout(() => applyLayoutState(window.__tcxPendingLayout), 500);
+  }
   renderMarkers();
   loadActivePanel();
   // Realtime refresh every 2 minutes
@@ -235,8 +474,10 @@ function initMap() {
     center: [39.0, -75.5], // Mid-Atlantic default bias
     zoom: 6,
     zoomControl: false,
-    attributionControl: true
+    attributionControl: false
   });
+  // ensure no bottom chrome leaks outside map
+  try { document.querySelectorAll('.leaflet-bottom').forEach(el => { el.style.display = 'none'; }); } catch(_){}
 
   // Zoom +/- top-right so they don't cover bottom/left data
   // custom zoom stack only — avoid overlapping Leaflet control
@@ -252,10 +493,7 @@ function initMap() {
   });
   document.getElementById("zoomLevel").textContent = `Z ${map.getZoom()}`;
 
-  map.attributionControl.setPrefix("");
-  map.attributionControl.addAttribution(
-    "ESRI · TomTom · Garmin · FAO · NOAA · USGS | CO-OPS"
-  );
+  // attribution disabled — sources listed in right panel
 }
 
 function setBasemap(type) {
@@ -1150,6 +1388,14 @@ function bindUI() {
     watchedStation = null;
     document.getElementById("watchPanel")?.classList.add("hidden");
   });
+
+  document.getElementById("popoutStationBtn")?.addEventListener("click", () => {
+    if (typeof selectedStation !== "undefined" && selectedStation && typeof popoutStation === "function") {
+      popoutStation(selectedStation);
+    } else {
+      showToast("Open a station first");
+    }
+  });
 }
 
 function doSearch() {
@@ -1395,8 +1641,9 @@ function renderWatchSlots() {
         <div class="wc-actions">
           <button data-act="modal">OPEN FULL</button>
           <button data-act="collapse">COLLAPSE</button>
-          <button data-act="remove">REMOVE</button>
-        </div>` : `<div class="wc-actions"><button data-act="expand">EXPAND + GRAPH</button><button data-act="remove">×</button></div>`}
+          <button data-act="popout">POPOUT</button>
+          <button type="button" data-act="remove">REMOVE</button>
+        </div>` : `<div class="wc-actions"><button data-act="expand">EXPAND + GRAPH</button><button data-act="popout">POPOUT</button><button data-act="remove">×</button></div>`}
     </div>`;
   }).join("");
 
@@ -1419,6 +1666,9 @@ function renderWatchSlots() {
           setTimeout(() => drawWatchChart(watchedList[idx]), 50);
         } else if (act === "modal") {
           openWatchStation(id);
+        } else if (act === "popout") {
+          const w = watchedList[idx];
+          if (typeof popoutWatchCard === "function") popoutWatchCard(w);
         }
       };
     });
@@ -1642,81 +1892,6 @@ async function refreshAllWatches() {
   }
 }
 
-// Extend bindUI for new controls (called after DOM ready already bound some)
-
-
-function initSplitters() {
-  const root = document.documentElement;
-  const saved = JSON.parse(localStorage.getItem("tcx_layout") || "{}");
-  if (saved.leftW) root.style.setProperty("--left-w", saved.leftW + "px");
-  if (saved.rightW) root.style.setProperty("--right-w", saved.rightW + "px");
-
-  document.querySelectorAll(".splitter-v").forEach(sp => {
-    let dragging = false;
-    sp.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      dragging = true;
-      sp.classList.add("dragging");
-      const which = sp.dataset.split;
-      const onMove = (ev) => {
-        if (!dragging) return;
-        const grid = document.querySelector(".main-grid");
-        if (!grid) return;
-        const rect = grid.getBoundingClientRect();
-        if (which === "left") {
-          const w = Math.min(360, Math.max(160, ev.clientX - rect.left));
-          root.style.setProperty("--left-w", w + "px");
-        } else {
-          const w = Math.min(380, Math.max(180, rect.right - ev.clientX));
-          root.style.setProperty("--right-w", w + "px");
-        }
-        if (map) map.invalidateSize();
-      };
-      const onUp = () => {
-        dragging = false;
-        sp.classList.remove("dragging");
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-        const lw = parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 220;
-        const rw = parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 240;
-        localStorage.setItem("tcx_layout", JSON.stringify({ leftW: lw, rightW: rw }));
-        if (map) map.invalidateSize();
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    });
-  });
-}
-
-function initCollapsibleSections() {
-  document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
-    if (hdr.querySelector(".collapse-btn")) return;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "collapse-btn";
-    btn.title = "Collapse / expand";
-    btn.textContent = ""; btn.setAttribute("aria-label", "Collapse");
-    hdr.appendChild(btn);
-    const toggle = (e) => {
-      e?.stopPropagation?.();
-      const sec = hdr.closest(".panel-section");
-      if (!sec) return;
-      sec.classList.toggle("collapsed");
-      btn.setAttribute("aria-expanded", sec.classList.contains("collapsed") ? "false" : "true");
-      if (typeof map !== "undefined" && map) setTimeout(() => map.invalidateSize(), 200);
-    };
-    btn.addEventListener("click", toggle);
-    hdr.addEventListener("dblclick", toggle);
-  });
-}
-
-function initExtraZoomControls() {
-  document.getElementById("zoomInBtn")?.addEventListener("click", () => map?.zoomIn());
-  document.getElementById("zoomOutBtn")?.addEventListener("click", () => map?.zoomOut());
-  document.getElementById("zoomWorldBtn")?.addEventListener("click", () => map?.setView([20, -40], 3));
-  document.getElementById("zoomConusBtn")?.addEventListener("click", () => map?.fitBounds([[24.5, -125], [49.5, -66]]));
-  document.getElementById("zoomRegionBtn")?.addEventListener("click", () => map?.fitBounds([[37.8, -77.5], [41.2, -73.8]]));
-}
 
 document.addEventListener("DOMContentLoaded", () => {
   setTimeout(() => {

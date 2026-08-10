@@ -2141,3 +2141,95 @@ select option {
   color: var(--text-muted);
   letter-spacing: 0.06em;
 }
+
+
+/* Kill bottom artifacts / white line / stray attribution */
+html, body {
+  overflow: hidden !important;
+  background: #07090c !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.leaflet-control-attribution,
+.leaflet-bottom.leaflet-right,
+.leaflet-bottom.leaflet-left .leaflet-control-attribution {
+  display: none !important;
+}
+#app::after,
+body::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* Watch bar refined grid */
+.watch-strip {
+  position: relative;
+  z-index: 50;
+  background: #0c0f14 !important;
+  border-top: 1px solid #1e252e !important;
+  box-shadow: none !important;
+}
+#watchSlots {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+  gap: 10px !important;
+  padding: 10px 12px 14px !important;
+  align-content: start !important;
+}
+.watch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 88px;
+}
+.watch-card .wc-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.watch-card .wc-actions button {
+  font-size: 9px !important;
+  padding: 3px 6px !important;
+  border: 1px solid #2a3340 !important;
+  background: transparent !important;
+  color: var(--text-dim) !important;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.watch-card .wc-actions button:hover {
+  border-color: var(--orange) !important;
+  color: var(--orange) !important;
+}
+.watch-card.expanded {
+  grid-column: span 2;
+  min-height: 200px;
+}
+@media (max-width: 900px) {
+  .watch-card.expanded { grid-column: span 1; }
+}
+
+/* Layout toolbar */
+.layout-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.layout-bar button {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid #2a3340;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.layout-bar button:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+/* Popout window body (when opened via blob) uses same vars if possible */
