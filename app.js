@@ -2146,7 +2146,8 @@ function closeAlertModal() {
 
 
 
-// ========== nowCOAST / NOAA MAP LAYERS (on-map WMS, no iframe) ==========
+
+// ========== nowCOAST / NOAA MAP LAYERS (WMS + Esri + click identify) ==========
 const NC_WMS = "https://nowcoast.noaa.gov/geoserver/ows";
 const NC_WMS_MAP = {
   alerts_nc: "alerts:watches_warnings_advisories",
@@ -2165,38 +2166,32 @@ const NC_WMS_MAP = {
   waterlevels_nc: "stofs2d:stofs2d_cwl_max_contours",
   radar: "weather_radar:base_reflectivity_mosaic",
   satellite: "satellite:goes_longwave_imagery",
-  // aliases used by older checkboxes
   sst: "sea_surface_temperature:global_sea_surface_temperature",
   precip: "ndfd_precipitation:6hr_precipitation_amount",
   s102: "s100:s102_coverage",
   s104: "s100:s104_coverage",
   s111: "s100:s111_coverage",
-  waterlevels: "stofs3d:stofs3d_cwl_stations"
+  waterlevels: "stofs3d:stofs3d_cwl_stations",
+  federal: "boundaries:military_boundaries"
 };
 const ncLayerState = {};
 let rainViewerHost = "https://tilecache.rainviewer.com";
 let rainViewerRadarPath = null;
+let ncIdentifyBound = false;
 
 function makeWmsLayer(layers, opts = {}) {
-  const lyr = L.tileLayer.wms(NC_WMS, {
+  return L.tileLayer.wms(NC_WMS, {
     layers,
     format: "image/png",
     transparent: true,
     version: "1.1.1",
-    opacity: opts.opacity ?? 0.7,
+    opacity: opts.opacity ?? 0.75,
     zIndex: opts.zIndex ?? 360,
     attribution: opts.attribution || "NOAA nowCOAST",
     uppercase: true,
-    // force redraw when map moves so layers "refresh"
     tileSize: 256,
-    updateWhenIdle: false,
-    updateWhenZooming: true
+    updateWhenIdle: false
   });
-  // On error, toast once
-  lyr.on("tileerror", () => {
-    /* quiet — some tiles empty outside coverage */
-  });
-  return lyr;
 }
 
 function setNcOpacity(pct) {
@@ -2207,15 +2202,12 @@ function setNcOpacity(pct) {
 }
 
 function removeNc(key) {
-  if (ncLayerState[key]) {
-    try {
-      if (ncLayerState[key]._redrawHandler) {
-        map.off("moveend", ncLayerState[key]._redrawHandler);
-      }
-      map.removeLayer(ncLayerState[key]);
-    } catch (_) {}
-    ncLayerState[key] = null;
-  }
+  if (!ncLayerState[key]) return;
+  try {
+    if (ncLayerState[key]._redrawHandler) map.off("moveend", ncLayerState[key]._redrawHandler);
+    map.removeLayer(ncLayerState[key]);
+  } catch (_) {}
+  ncLayerState[key] = null;
 }
 
 async function initRainViewer() {
@@ -2225,15 +2217,130 @@ async function initRainViewer() {
     rainViewerHost = data.host || rainViewerHost;
     const past = data.radar?.past || [];
     if (past.length) rainViewerRadarPath = past[past.length - 1].path;
-  } catch (e) {
-    console.warn("RainViewer", e);
+  } catch (_) {}
+}
+
+function openLayerDetail(title, html) {
+  const modal = document.getElementById("alertModal");
+  if (!modal) {
+    showToast(title);
+    return;
   }
+  document.getElementById("alertModalEvent").textContent = title;
+  document.getElementById("alertModalSeverity").textContent = "LAYER DETAIL";
+  document.getElementById("alertModalArea").textContent = "";
+  document.getElementById("alertModalHeadline").textContent = "";
+  document.getElementById("alertModalDesc").textContent = "";
+  document.getElementById("alertModalInstr").innerHTML = html;
+  document.getElementById("alertModalMeta").textContent = "";
+  modal.classList.remove("hidden");
+}
+
+function gaugeStatusColor(status) {
+  const s = (status || "").toLowerCase();
+  if (s.includes("major")) return "#c0392b";
+  if (s.includes("moderate")) return "#e67e22";
+  if (s.includes("flood") || s.includes("minor")) return "#f1c40f";
+  if (s.includes("action")) return "#3498db";
+  return "#27ae60";
+}
+
+function bindRiverGaugePopups(layer) {
+  layer.on("click", (e) => {
+    const f = e.layer?.feature || e.propagatedFrom?.feature;
+    const p = f?.properties || e.layer?.feature?.properties;
+    // esri featureLayer click
+  });
+  if (layer.bindPopup) {
+    layer.bindPopup((layer) => {
+      const p = layer.feature?.properties || {};
+      const status = p.status || p.flood || "unknown";
+      const color = gaugeStatusColor(status);
+      const obs = p.observed != null ? p.observed : "—";
+      const units = p.units || "ft";
+      const name = p.location || p.gaugelid || "River Gauge";
+      const waterbody = p.waterbody || "";
+      const time = p.obstime || "";
+      const action = p.action != null ? p.action : "—";
+      const flood = p.flood != null ? p.flood : "—";
+      const mod = p.moderate != null ? p.moderate : "—";
+      const maj = p.major != null ? p.major : "—";
+      const url = p.url || "";
+      return `<div style="min-width:220px;font-family:monospace;font-size:11px">
+        <strong style="color:#e67e22">${name}</strong><br/>
+        <span style="color:${color}">● ${status}</span><br/>
+        ${waterbody}<br/>
+        <hr style="border-color:#333"/>
+        Observed: <b>${obs} ${units}</b><br/>
+        Time: ${time}<br/>
+        Action: ${action} · Flood: ${flood}<br/>
+        Moderate: ${mod} · Major: ${maj}<br/>
+        Gauge: ${p.gaugelid || ""} · ${p.state || ""} ${p.wfo || ""}<br/>
+        ${url ? `<a href="${url}" target="_blank" style="color:#e67e22">Hydrograph / AHPS ↗</a>` : ""}
+      </div>`;
+    });
+  }
+}
+
+async function wmsIdentify(latlng, layerName) {
+  if (!map || !layerName) return null;
+  const size = map.getSize();
+  const bounds = map.getBounds();
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  // Project to 3857-ish bbox for WMS 1.1.1 with EPSG:3857 is complex; use 4326
+  const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+  const point = map.latLngToContainerPoint(latlng);
+  const url = `${NC_WMS}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&LAYERS=${encodeURIComponent(layerName)}&QUERY_LAYERS=${encodeURIComponent(layerName)}&STYLES=&SRS=EPSG:4326&BBOX=${bbox}&WIDTH=${size.x}&HEIGHT=${size.y}&X=${Math.round(point.x)}&Y=${Math.round(point.y)}&INFO_FORMAT=application/json&FEATURE_COUNT=5`;
+  try {
+    const res = await fetch(url);
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("json")) {
+      const json = await res.json();
+      return json;
+    }
+    const text = await res.text();
+    return { raw: text.slice(0, 2000) };
+  } catch (e) {
+    return null;
+  }
+}
+
+function bindNcIdentify() {
+  if (ncIdentifyBound || !map) return;
+  ncIdentifyBound = true;
+  map.on("click", async (e) => {
+    // Find first active WMS layer to identify
+    const active = Object.entries(ncLayerState).filter(([k, v]) => v && NC_WMS_MAP[k]);
+    if (!active.length) return;
+    // Prefer bluetopo / waterlevels / radar for identify
+    const prefer = ["bluetopo", "waterlevels_nc", "vlm", "sfc_currents", "sst_nc", "radar"];
+    let key = prefer.find(k => ncLayerState[k]) || active[0][0];
+    const layerName = NC_WMS_MAP[key];
+    if (!layerName) return;
+    const info = await wmsIdentify(e.latlng, layerName);
+    if (!info) return;
+    let html = "";
+    if (info.features && info.features.length) {
+      html = info.features.map(f => {
+        const props = f.properties || {};
+        return Object.entries(props).map(([k, v]) => `<b>${k}</b>: ${v}`).join("<br/>");
+      }).join("<hr/>");
+    } else if (info.raw) {
+      html = `<pre style="white-space:pre-wrap;font-size:10px">${info.raw}</pre>`;
+    } else {
+      return; // nothing
+    }
+    L.popup({ maxWidth: 320 })
+      .setLatLng(e.latlng)
+      .setContent(`<div style="font-size:11px"><strong>${key}</strong><br/>${html}</div>`)
+      .openOn(map);
+  });
 }
 
 function toggleNcLayer(key, on) {
   if (!map) return;
 
-  // CO-OPS coastal flood polygons (our custom layer)
   if (key === "alerts") {
     showWarnings = on;
     document.getElementById("toggleWarnings")?.classList.toggle("active", on);
@@ -2248,174 +2355,147 @@ function toggleNcLayer(key, on) {
   }
 
   const op = (parseInt(document.getElementById("ncOpacity")?.value || "70", 10)) / 100;
+  bindNcIdentify();
 
-  // Generic nowCOAST WMS layers
+  // Generic nowCOAST WMS
   if (NC_WMS_MAP[key]) {
     ncLayerState[key] = makeWmsLayer(NC_WMS_MAP[key], {
       opacity: op,
-      zIndex: 320 + Object.keys(ncLayerState).length,
-      attribution: "NOAA nowCOAST"
+      zIndex: 350 + Object.keys(ncLayerState).length
     });
     ncLayerState[key].addTo(map);
-    // Kick a refresh so tiles load immediately
     setTimeout(() => {
-      try {
-        map.invalidateSize();
-        ncLayerState[key]?.redraw();
-      } catch (_) {}
-    }, 100);
-    showToast(`${key.replace(/_/g, " ")} ON`);
+      try { map.invalidateSize(); ncLayerState[key]?.redraw(); } catch (_) {}
+    }, 150);
+    showToast(`${key.replace(/_/g, " ")} ON — click map for values`);
     return;
   }
 
   if (key === "tropical") {
-    // Prefer nowCOAST tropical WMS; also NHC MapServer
-    if (NC_WMS_MAP.tropical_nc) {
-      ncLayerState.tropical = makeWmsLayer(NC_WMS_MAP.tropical_nc, { opacity: op, zIndex: 400 });
-      ncLayerState.tropical.addTo(map);
+    // nowCOAST tropical WMS + NHC MapServer
+    ncLayerState.tropical = makeWmsLayer("tropical_cyclones:active_tropical_cyclones", { opacity: op, zIndex: 420 });
+    ncLayerState.tropical.addTo(map);
+    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
+      try {
+        const nhc = L.esri.dynamicMapLayer({
+          url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer",
+          opacity: 0.9,
+          f: "image"
+        });
+        nhc.addTo(map);
+        // store secondary on same key via layer group
+        map.removeLayer(ncLayerState.tropical);
+        const g = L.layerGroup([ncLayerState.tropical, nhc]);
+        g.addTo(map);
+        ncLayerState.tropical = g;
+      } catch (_) {}
     }
-    loadTropicalCyclones();
+    showToast("Tropical Cyclones ON (empty if no active storms)");
     return;
   }
 
   if (key === "nautical") {
-    // NOAA Chart Display — actual chart imagery (not ENC footprint grid)
+    // NOAA Charts dynamic map (chart imagery)
     if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      ncLayerState.nautical = L.esri.dynamicMapLayer({
+      const lyr = L.esri.dynamicMapLayer({
         url: "https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer",
-        opacity: Math.min(op + 0.15, 1),
+        opacity: Math.min(op + 0.2, 1),
         f: "image",
-        position: "overlayPane"
+        format: "png32"
       });
-      ncLayerState.nautical.addTo(map);
-      // Force refresh on pan/zoom
-      const redraw = () => {
-        try { ncLayerState.nautical?.redraw(); } catch (_) {}
-      };
+      lyr.addTo(map);
+      const redraw = () => { try { lyr.redraw(); } catch (_) {} };
       map.on("moveend", redraw);
-      ncLayerState.nautical._redrawHandler = redraw;
-      showToast("Nautical Charts ON — zoom in along coasts for detail");
-    } else {
-      showToast("Nautical charts need Esri Leaflet");
-    }
+      lyr._redrawHandler = redraw;
+      ncLayerState.nautical = lyr;
+      // Zoom hint
+      if (map.getZoom() < 9) {
+        map.setZoom(10);
+        showToast("Nautical Charts ON — zoomed in for chart detail");
+      } else {
+        showToast("Nautical Charts ON");
+      }
+    } else showToast("Esri Leaflet required for charts");
     return;
   }
 
   if (key === "convective") {
-    // SPC convective outlook via IEM
     if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
       ncLayerState.convective = L.esri.dynamicMapLayer({
-        url: "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_convective_outlook/MapServer",
+        url: "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer",
+        layers: [0, 1, 8, 9, 16, 17],
         opacity: op,
         f: "image"
       });
       ncLayerState.convective.addTo(map);
-      showToast("Convective Outlooks ON");
-    } else {
-      // Fallback tile from IEM geojson is heavy; open note
-      showToast("Convective outlook service unavailable");
-    }
-    return;
-  }
-
-  if (key === "federal") {
-    ncLayerState.federal = makeWmsLayer("boundaries:military_boundaries", {
-      opacity: op, zIndex: 410, attribution: "NOAA boundaries"
-    });
-    ncLayerState.federal.addTo(map);
-    showToast("Federal / military boundaries ON");
+      showToast("SPC Convective Outlooks ON (Day 1–3)");
+    } else showToast("Convective outlooks unavailable");
     return;
   }
 
   if (key === "river") {
-    // USGS NWIS sites via Esri living atlas or IEM
     if (typeof L.esri !== "undefined" && L.esri.featureLayer) {
-      ncLayerState.river = L.esri.featureLayer({
-        url: "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Rivers_and_Streams/FeatureServer/0",
-        where: "1=1",
-        minZoom: 8
-      });
-      // Better: USGS real-time gauges
-      try {
-        map.removeLayer(ncLayerState.river);
-      } catch (_) {}
-      ncLayerState.river = L.esri.featureLayer({
+      const fl = L.esri.featureLayer({
         url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer/0",
-        pointToLayer: (geo, latlng) => L.circleMarker(latlng, {
-          radius: 4, color: "#3498db", fillColor: "#3498db", fillOpacity: 0.8, weight: 1
-        })
+        pointToLayer: (geojson, latlng) => {
+          const st = (geojson.properties?.status || "").toLowerCase();
+          const color = gaugeStatusColor(st);
+          return L.circleMarker(latlng, {
+            radius: 5,
+            color: "#111",
+            weight: 1,
+            fillColor: color,
+            fillOpacity: 0.9
+          });
+        }
       });
-      ncLayerState.river.addTo(map);
-      showToast("River Gauges ON (zoom in if sparse)");
+      bindRiverGaugePopups(fl);
+      fl.on("click", (e) => {
+        const p = e.layer?.feature?.properties || {};
+        if (!p.gaugelid && !p.location) return;
+        // also open richer detail
+        const html = `
+          <div style="font-size:12px;line-height:1.5">
+            <b>${p.location || p.gaugelid}</b><br/>
+            Water body: ${p.waterbody || "—"}<br/>
+            Status: <b>${p.status || "—"}</b><br/>
+            Observed: <b>${p.observed ?? "—"} ${p.units || "ft"}</b> @ ${p.obstime || ""}<br/>
+            Action ${p.action ?? "—"} · Flood ${p.flood ?? "—"} · Mod ${p.moderate ?? "—"} · Maj ${p.major ?? "—"}<br/>
+            ${p.url ? `<a href="${p.url}" target="_blank" style="color:var(--orange)">View Hydrograph Online ↗</a>` : ""}
+          </div>`;
+        openLayerDetail(`RIVER GAUGE // ${p.gaugelid || ""}`, html);
+      });
+      fl.addTo(map);
+      ncLayerState.river = fl;
+      showToast("River Gauges ON — click a gauge for levels & hydrograph link");
     } else showToast("River gauges need Esri Leaflet");
     return;
   }
 
   if (key === "zoneForecast") {
-    if (typeof L.esri !== "undefined" && L.esri.featureLayer) {
-      ncLayerState.zoneForecast = L.esri.featureLayer({
-        url: "https://mapservices.weather.noaa.gov/static/rest/services/borders/public_zones/MapServer/0",
-        style: () => ({ color: "#e67e22", weight: 1, fillOpacity: 0.05 }),
-        minZoom: 6
+    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
+      ncLayerState.zoneForecast = L.esri.dynamicMapLayer({
+        url: "https://mapservices.weather.noaa.gov/static/rest/services/nws_reference_maps/nws_reference_map/MapServer",
+        layers: [4, 5, 6, 7, 8],
+        opacity: op,
+        f: "image"
       });
       ncLayerState.zoneForecast.addTo(map);
-      showToast("Public forecast zones ON (zoom in)");
-    } else showToast("Zone forecasts layer unavailable");
+      showToast("Zone Weather Forecasts ON (marine + public zones)");
+    } else showToast("Zone forecasts unavailable");
     return;
   }
 
   if (key === "surface_obs") {
-    // MADIS / surface obs via nowCOAST if available — use NDFD wind as proxy note
-    // Try IEM ASOS
-    showToast("Surface Observations: enable Weather Radar + our station markers for live obs");
+    showToast("Surface obs: use station markers + Weather Radar for live conditions");
     return;
   }
 
-  showToast(`No map service mapped for ${key}`);
+  showToast(`No service mapped for ${key}`);
 }
 
 async function loadTropicalCyclones() {
-  removeNc("tropical");
-  try {
-    // NHC tropical weather MapServer (outlook + active storms when present)
-    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      const lyr = L.esri.dynamicMapLayer({
-        url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer",
-        opacity: 0.85,
-        f: "image"
-      });
-      lyr.addTo(map);
-      ncLayerState.tropical = lyr;
-      showToast("Tropical Cyclones layer ON (NHC outlook / tracks)");
-      return;
-    }
-  } catch (e) {
-    console.warn("NHC MapServer", e);
-  }
-
-  // Fallback: CurrentStorms.json markers
-  try {
-    const res = await fetch("https://www.nhc.noaa.gov/CurrentStorms.json");
-    const data = await res.json();
-    const storms = data.activeStorms || [];
-    const group = L.layerGroup();
-    if (!storms.length) {
-      showToast("No active tropical cyclones (Atlantic/EPac/CPac clear)");
-    }
-    storms.forEach(s => {
-      const lat = parseFloat(s.latitude ?? s.lat);
-      const lon = parseFloat(s.longitude ?? s.lon);
-      if (isNaN(lat) || isNaN(lon)) return;
-      const m = L.marker([lat, lon]);
-      m.bindPopup(`<strong>${s.name || s.id}</strong><br/>${s.classification || ""}`);
-      group.addLayer(m);
-    });
-    ncLayerState.tropical = group;
-    group.addTo(map);
-  } catch (e) {
-    console.warn(e);
-    showToast("Tropical data unavailable — try again later");
-  }
+  toggleNcLayer("tropical", true);
 }
 
 function bindNowcoastUI() {
