@@ -2178,15 +2178,25 @@ let rainViewerHost = "https://tilecache.rainviewer.com";
 let rainViewerRadarPath = null;
 
 function makeWmsLayer(layers, opts = {}) {
-  return L.tileLayer.wms(NC_WMS, {
+  const lyr = L.tileLayer.wms(NC_WMS, {
     layers,
     format: "image/png",
     transparent: true,
     version: "1.1.1",
     opacity: opts.opacity ?? 0.7,
     zIndex: opts.zIndex ?? 360,
-    attribution: opts.attribution || "NOAA nowCOAST"
+    attribution: opts.attribution || "NOAA nowCOAST",
+    uppercase: true,
+    // force redraw when map moves so layers "refresh"
+    tileSize: 256,
+    updateWhenIdle: false,
+    updateWhenZooming: true
   });
+  // On error, toast once
+  lyr.on("tileerror", () => {
+    /* quiet — some tiles empty outside coverage */
+  });
+  return lyr;
 }
 
 function setNcOpacity(pct) {
@@ -2198,7 +2208,12 @@ function setNcOpacity(pct) {
 
 function removeNc(key) {
   if (ncLayerState[key]) {
-    try { map.removeLayer(ncLayerState[key]); } catch (_) {}
+    try {
+      if (ncLayerState[key]._redrawHandler) {
+        map.off("moveend", ncLayerState[key]._redrawHandler);
+      }
+      map.removeLayer(ncLayerState[key]);
+    } catch (_) {}
     ncLayerState[key] = null;
   }
 }
@@ -2242,6 +2257,13 @@ function toggleNcLayer(key, on) {
       attribution: "NOAA nowCOAST"
     });
     ncLayerState[key].addTo(map);
+    // Kick a refresh so tiles load immediately
+    setTimeout(() => {
+      try {
+        map.invalidateSize();
+        ncLayerState[key]?.redraw();
+      } catch (_) {}
+    }, 100);
     showToast(`${key.replace(/_/g, " ")} ON`);
     return;
   }
@@ -2257,15 +2279,25 @@ function toggleNcLayer(key, on) {
   }
 
   if (key === "nautical") {
+    // NOAA Chart Display — actual chart imagery (not ENC footprint grid)
     if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
       ncLayerState.nautical = L.esri.dynamicMapLayer({
-        url: "https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/Gridded_NOAA_ENC/MapServer",
-        opacity: op,
-        f: "image"
+        url: "https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer",
+        opacity: Math.min(op + 0.15, 1),
+        f: "image",
+        position: "overlayPane"
       });
       ncLayerState.nautical.addTo(map);
-      showToast("Nautical Charts ON");
-    } else showToast("ENC layer needs Esri Leaflet");
+      // Force refresh on pan/zoom
+      const redraw = () => {
+        try { ncLayerState.nautical?.redraw(); } catch (_) {}
+      };
+      map.on("moveend", redraw);
+      ncLayerState.nautical._redrawHandler = redraw;
+      showToast("Nautical Charts ON — zoom in along coasts for detail");
+    } else {
+      showToast("Nautical charts need Esri Leaflet");
+    }
     return;
   }
 
