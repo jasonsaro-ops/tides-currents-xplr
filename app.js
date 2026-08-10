@@ -1459,7 +1459,7 @@ function showToast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.classList.remove("hidden");
-  setTimeout(() => t.classList.add("hidden"), 3400);
+  setTimeout(() => t.classList.add("hidden"), 2800);
 }
 
 
