@@ -381,7 +381,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (typeof bindNowcoastUI === 'function') bindNowcoastUI();
   if (typeof initCollapsibleSections === 'function') initCollapsibleSections();
   if (typeof initExtraZoomControls === 'function') initExtraZoomControls();
-  if (typeof initSplitters === 'function') initSplitters();
+  // column resize disabled — fixed widths
+
   if (typeof bindLayoutUI === 'function') bindLayoutUI();
   // auto-restore full layout if present
   try {
@@ -1380,6 +1381,14 @@ function bindUI() {
   document.getElementById("fitUSA")?.addEventListener("click", () => map.setView([39.5, -98.35], 4));
   document.getElementById("resetViewBtn")?.addEventListener("click", resetView);
   document.getElementById("softRefreshBtn")?.addEventListener("click", softRefresh);
+  document.getElementById("logoRefreshBtn")?.addEventListener("click", () => {
+    if (typeof softRefresh === "function") softRefresh();
+    else {
+      loadActivePanel?.(true);
+      refreshAllWatches?.();
+      showToast?.("Soft refresh");
+    }
+  });
   document.getElementById("toggleClusters")?.addEventListener("click", () => {
     useClusters = !useClusters;
     renderMarkers();
