@@ -11,15 +11,17 @@
 
 
   // ---------- CORS-safe fetch (GitHub Pages cannot hit NDBC / some NOAA APIs directly) ----------
+  function isCorsOkHost(url) {
+    return /tidesandcurrents\.noaa\.gov|api\.weather\.gov|mapservices\.weather\.noaa\.gov|rainviewer\.com/i.test(url);
+  }
+
   function proxyUrls(url) {
+    if (isCorsOkHost(url)) return [url];
     var u = encodeURIComponent(url);
     return [
-      url, // try direct first (works when server sends ACAO)
+      url,
       "https://corsproxy.io/?" + u,
-      "https://api.codetabs.com/v1/proxy?quest=" + u,
-      "https://api.allorigins.win/raw?url=" + u,
-      "https://cors.eu.org/" + url,
-      "https://proxy.corsfix/" + url
+      "https://api.allorigins.win/raw?url=" + u
     ];
   }
 
@@ -37,7 +39,10 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r;
         })
-        .catch(function () { return next(); });
+        .catch(function (err) {
+          if (list.length === 1) throw err;
+          return next();
+        });
     }
     return next();
   }
@@ -917,10 +922,14 @@
     if (cls === "TS") color = "#fb923c";
     if (cls === "TD" || cls === "SS" || cls === "SD") color = "#fbbf24";
     if (cls === "PTC" || cls === "DB") color = "#a3a3a3";
-    var html = '<div class="tcx-storm" style="--sc:' + color + '"><span>🌀</span></div>';
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">'
+      + '<circle cx="14" cy="14" r="13" fill="rgba(0,0,0,0.75)" stroke="' + color + '" stroke-width="2"/>'
+      + '<path d="M14 4c4 2 7 5 7 10s-3 8-7 10c4-2 6-5 6-10S18 6 14 4z" fill="' + color + '" opacity="0.9"/>'
+      + '<path d="M14 24c-4-2-7-5-7-10s3-8 7-10c-4 2-6 5-6 10s2 8 6 10z" fill="' + color + '" opacity="0.55"/>'
+      + '<circle cx="14" cy="14" r="3" fill="#fff"/></svg>';
     return L.divIcon({
       className: "tcx-div-icon",
-      html: html,
+      html: '<div class="tcx-storm" style="--sc:' + color + '">' + svg + "</div>",
       iconSize: [28, 28],
       iconAnchor: [14, 14]
     });
@@ -955,36 +964,42 @@
     var clsLabel = {
       HU: "Hurricane", MH: "Major Hurricane", TS: "Tropical Storm", TD: "Tropical Depression",
       SS: "Subtropical Storm", SD: "Subtropical Depression", PTC: "Potential Tropical Cyclone",
-      DB: "Disturbance", EX: "Extratropical", LO: "Low", WV: "Tropical Wave"
+      DB: "Disturbance", EX: "Extratropical", LO: "Low", WV: "Tropical Wave", STD: "Storm"
     };
+    var cls = s.classification || "";
+    var title = (clsLabel[cls] || cls || "Storm") + " " + (s.name || s.id || "");
     var body =
       '<div class="meta-grid">' +
         cell("Name", s.name, "") +
-        cell("Classification", (clsLabel[s.classification] || s.classification || "—") + (s.classification ? " (" + s.classification + ")" : ""), "") +
-        cell("Intensity", s.intensity, "kt") +
-        cell("Pressure", s.pressure, "mb") +
-        cell("Position", (s.latitude || s.lat) + " / " + (s.longitude || s.lng), "") +
-        cell("Movement", (s.movementDir != null ? s.movementDir + "°" : "—") + (s.movementSpeed != null ? " at " + s.movementSpeed + " kt" : ""), "") +
-        cell("Last update", s.lastUpdate ? new Date(s.lastUpdate).toUTCString() : "—", "") +
-        cell("Bin", s.binNumber || "—", "") +
+        cell("Classification", (clsLabel[cls] || cls || "—") + (cls ? " (" + cls + ")" : ""), "") +
+        cell("Max sustained winds", s.intensity, "kt") +
+        cell("Minimum pressure", s.pressure, "mb") +
+        cell("Center lat", s.latitude || s.lat, "") +
+        cell("Center lon", s.longitude || s.lng, "") +
+        cell("Movement direction", s.movementDir != null ? s.movementDir : null, "°") +
+        cell("Movement speed", s.movementSpeed != null ? s.movementSpeed : null, "kt") +
+        cell("Last NHC update", s.lastUpdate ? new Date(s.lastUpdate).toUTCString() : "—", "") +
+        cell("Advisory bin", s.binNumber || "—", "") +
         cell("Storm ID", s.id || "—", "") +
       "</div>" +
       '<div class="btn-row">' +
-        '<button type="button" class="action-btn primary" data-act="center">Center map</button>' +
+        '<button type="button" class="action-btn primary" data-act="center">Center on storm</button>' +
       "</div>" +
       '<div class="source-bar">' +
-        "Source: NHC CurrentStorms · " +
+        "Source: NHC CurrentStorms (observed conditions) · " +
         (s.publicAdvisory ? '<a href="' + s.publicAdvisory + '" target="_blank" rel="noopener">Public advisory ↗</a> · ' : "") +
         (s.forecastDiscussion ? '<a href="' + s.forecastDiscussion + '" target="_blank" rel="noopener">Discussion ↗</a> · ' : "") +
         (s.forecastGraphics ? '<a href="' + s.forecastGraphics + '" target="_blank" rel="noopener">Graphics ↗</a>' : "") +
       "</div>";
 
-    var win = openFloat(key, (s.classification || "") + " " + (s.name || "Storm"), "NHC active", body, {
-      width: 440, edgeClass: "edge-alert"
+    var win = openFloat(key, title, "Active · NHC", body, {
+      width: 460, edgeClass: "edge-alert"
     });
     if (!win) return;
     var c = win.querySelector('[data-act="center"]');
-    if (c) c.onclick = function () { if (map) map.setView([+s.lat, +s.lng], 5); };
+    if (c) c.onclick = function () {
+      if (map) map.setView([+s.lat, +s.lng], 5);
+    };
   }
 
   function loadNwsAlerts() {
@@ -1660,67 +1675,93 @@
   }
 
   function loadStationLive(s, win) {
-    const box = win.querySelector("#liveVals_" + s.id);
+    var box = win.querySelector("#liveVals_" + s.id);
     if (!box) return;
-    const products = ["water_level", "air_temperature", "water_temperature", "wind", "air_pressure"];
+    box.innerHTML = '<div class="muted">Loading latest observations…</div>';
+    var products = ["water_level", "air_temperature", "water_temperature", "wind", "air_pressure", "humidity", "visibility"];
     Promise.all(products.map(function (p) {
-      return corsJson(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id) +
-        "&product=" + p + "&datum=MLLW&units=english&time_zone=gmt&format=json")
+      var url = DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+        + "&product=" + encodeURIComponent(p) + "&datum=MLLW&units=english&time_zone=gmt&format=json";
+      return fetch(url, { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (j) {
-          return { product: p, data: (j && j.data && j.data[0]) || null };
+          var row = null;
+          if (j && j.data && j.data[0]) row = j.data[0];
+          else if (j && j.wind && j.wind[0]) row = j.wind[0];
+          return { product: p, data: row };
         })
         .catch(function () { return { product: p, data: null }; });
     })).then(function (results) {
-      const cards = results.filter(function (r) { return r.data; }).map(function (r) {
-        let label = r.product.replace(/_/g, " ");
-        let val = r.data.v != null ? r.data.v : (r.data.s != null ? r.data.s : "—");
-        let unit = "";
+      var cards = results.filter(function (r) { return r.data; }).map(function (r) {
+        var label = r.product.replace(/_/g, " ");
+        var val = r.data.v != null ? r.data.v : (r.data.s != null ? r.data.s : "—");
+        var unit = "";
         if (r.product === "water_level") unit = " ft MLLW";
         if (r.product.indexOf("temp") >= 0) unit = " °F";
-        if (r.product === "wind") { val = r.data.s; unit = " kn"; }
+        if (r.product === "wind") { val = r.data.s != null ? r.data.s : val; unit = " kn"; }
         if (r.product === "air_pressure") unit = " mb";
-        return '<div class="meta-card"><div class="ml">' + label + '</div><div class="mv accent">' + val + unit + "</div></div>";
+        if (r.product === "humidity") unit = " %";
+        if (r.product === "visibility") unit = " nmi";
+        var t = r.data.t ? ' <span class="muted" style="font-size:10px">(' + r.data.t + ' UTC)</span>' : "";
+        return '<div class="meta-card"><div class="ml">' + label + '</div><div class="mv accent">' + val + unit + t + "</div></div>";
       });
-      box.innerHTML = cards.length ? cards.join("") : '<div class="muted">No recent observations</div>';
+      box.innerHTML = cards.length ? cards.join("") : '<div class="muted">No recent observations for this station</div>';
     });
   }
 
   function loadStationChart(s, product, canvasId, chartKey) {
     function tryDraw() {
-      const canvas = document.getElementById(canvasId);
-      if (!canvas) return;
-      if (typeof Chart === "undefined") return;
+      var canvas = document.getElementById(canvasId);
+      if (!canvas || typeof Chart === "undefined") return;
 
-      const hours = 48;
-      const end = new Date();
-      const begin = new Date(end.getTime() - hours * 3600 * 1000);
+      var hours = 48;
+      var end = new Date();
+      var begin = new Date(end.getTime() - hours * 3600 * 1000);
       function fmt(d) {
-        return d.toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 12);
+        var y = d.getUTCFullYear();
+        var m = String(d.getUTCMonth() + 1).padStart(2, "0");
+        var day = String(d.getUTCDate()).padStart(2, "0");
+        return "" + y + m + day;
       }
 
-      let url;
+      var url;
       if (product === "predictions") {
-        url = DATAAPI + "?begin_date=" + fmt(begin) + "&end_date=" + fmt(new Date(end.getTime() + hours * 3600 * 1000)) +
-          "&station=" + encodeURIComponent(s.id) + "&product=predictions&datum=MLLW&units=english&time_zone=gmt&interval=h&format=json";
+        var endPred = new Date(end.getTime() + hours * 3600 * 1000);
+        url = DATAAPI + "?begin_date=" + fmt(begin) + "&end_date=" + fmt(endPred)
+          + "&station=" + encodeURIComponent(s.id) + "&product=predictions&datum=MLLW&units=english&time_zone=gmt&interval=h&format=json";
       } else {
-        url = DATAAPI + "?begin_date=" + fmt(begin) + "&end_date=" + fmt(end) +
-          "&station=" + encodeURIComponent(s.id) + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json";
+        url = DATAAPI + "?begin_date=" + fmt(begin) + "&end_date=" + fmt(end)
+          + "&station=" + encodeURIComponent(s.id) + "&product=" + encodeURIComponent(product)
+          + "&datum=MLLW&units=english&time_zone=gmt&format=json";
       }
 
-      corsJson(url)
-        .then(function (j) {
-          let pts = [];
-          if (product === "predictions") {
-            pts = (j.predictions || []).map(function (p) { return { t: p.t, v: +p.v }; });
-          } else {
-            pts = (j.data || []).map(function (p) { return { t: p.t, v: +p.v }; });
-          }
-          drawChart(canvas, chartKey, pts, product === "predictions" ? "Predicted level (ft)" : "Water level (ft MLLW)");
+      fetch(url, { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
         })
-        .catch(function () {});
+        .then(function (j) {
+          var rows = (j && j.data) || (j && j.predictions) || [];
+          var points = rows.map(function (row) {
+            return { t: row.t, v: row.v != null ? +row.v : null };
+          }).filter(function (p) { return p.v != null && !isNaN(p.v); });
+          drawChart(canvas, chartKey, points, product.replace(/_/g, " "));
+        })
+        .catch(function (err) {
+          console.warn("chart", product, s.id, err);
+          var parent = canvas.parentElement;
+          if (parent) {
+            var msg = document.createElement("div");
+            msg.className = "muted";
+            msg.style.padding = "12px";
+            msg.textContent = "Chart data unavailable (" + product + ")";
+            parent.appendChild(msg);
+          }
+        });
     }
-    // chart canvas only exists after float is in DOM; slight delay for tab switch is fine
-    setTimeout(tryDraw, 50);
+    // canvas may not exist until tab shown
+    setTimeout(tryDraw, 100);
+    setTimeout(tryDraw, 500);
   }
 
   function drawChart(canvas, key, points, label) {
@@ -1849,69 +1890,14 @@
 
   function loadBuoyRealtimeSeries(b, win) {
     var box = win.querySelector("#buoySeries_" + b.id);
-    var canvas = win.querySelector("#buoyChart_" + b.id);
     if (!box) return;
-    var rtUrl = "https://www.ndbc.noaa.gov/data/realtime2/" + encodeURIComponent(b.id) + ".txt";
-    corsText(rtUrl)
-      .then(function (text) {
-        var lines = text.trim().split("\n").filter(function (ln) {
-          return ln && ln.charAt(0) !== "#";
-        });
-        if (lines.length && /YY|year|yr/i.test(lines[0])) lines = lines.slice(1);
-        if (lines.length && /mo|dy|mm/i.test(lines[0])) lines = lines.slice(1);
-        var pts = [];
-        lines.slice(-72).forEach(function (ln) {
-          var p = ln.trim().split(/\s+/);
-          if (p.length < 15) return;
-          // YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP ...
-          var wtmp = p[14];
-          var wspd = p[6];
-          if (wtmp === "MM" && wspd === "MM") return;
-          pts.push({
-            t: (p[3] || "") + ":" + (p[4] || ""),
-            wtmp: wtmp !== "MM" ? +wtmp : null,
-            wind: wspd !== "MM" ? +wspd : null,
-            wvht: p[8] !== "MM" ? +p[8] : null
-          });
-        });
-        if (!pts.length) {
-          box.textContent = "No recent numeric samples in realtime file.";
-          return;
-        }
-        box.innerHTML = "<strong>" + pts.length + "</strong> samples from NDBC realtime2/" + b.id + ".txt";
-        if (canvas && typeof Chart !== "undefined") {
-          var chartKey = "buoy_rt_" + b.id;
-          if (chartInstances.has(chartKey)) {
-            try { chartInstances.get(chartKey).destroy(); } catch (e) {}
-          }
-          var useWtmp = pts.some(function (p) { return p.wtmp != null; });
-          var chart = new Chart(canvas, {
-            type: "line",
-            data: {
-              labels: pts.map(function (p) { return p.t; }),
-              datasets: [{
-                label: useWtmp ? "Water temp °C" : "Wind m/s",
-                data: pts.map(function (p) { return useWtmp ? p.wtmp : p.wind; }),
-                borderColor: "#fb923c",
-                backgroundColor: "rgba(251,146,60,0.12)",
-                fill: true, tension: 0.25, pointRadius: 0, borderWidth: 1.5
-              }]
-            },
-            options: {
-              responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: true, labels: { color: "#8b9bb4", font: { size: 11 } } } },
-              scales: {
-                x: { ticks: { color: "#5c6b82", maxTicksLimit: 6, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-                y: { ticks: { color: "#5c6b82", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.06)" } }
-              }
-            }
-          });
-          chartInstances.set(chartKey, chart);
-        }
-      })
-      .catch(function () {
-        box.textContent = "Recent series unavailable (CORS). Live obs still shown above.";
-      });
+    // NDBC realtime2 has no CORS — use values already embedded in ndbc-latest.json
+    if (b.hasObs) {
+      box.innerHTML = "<strong>Latest observation</strong> from NDBC latest_obs (embedded)<br/>"
+        + (b.obsTime ? "<span class=\"mono\">" + b.obsTime + "</span>" : "");
+      return;
+    }
+    box.textContent = "No recent series — station not reporting in latest_obs.";
   }
 
   function openAlertWindow(a) {
@@ -2231,7 +2217,7 @@
     if (!radarState.playing || !radarState.frames.length) return;
     radarState.idx = (radarState.idx + 1) % radarState.frames.length;
     showRadarFrame();
-    radarState.timer = setTimeout(tickRadar, 700);
+    radarState.timer = setTimeout(tickRadar, 1400);
   }
 
   function stopRadar() {
