@@ -9,6 +9,47 @@
   const DATAAPI = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter";
   const REFRESH_MS = 120000;
 
+
+  // ---------- CORS-safe fetch (GitHub Pages cannot hit NDBC / some NOAA APIs directly) ----------
+  function proxyUrls(url) {
+    var u = encodeURIComponent(url);
+    return [
+      url, // try direct first (works when server sends ACAO)
+      "https://corsproxy.io/?" + u,
+      "https://api.codetabs.com/v1/proxy?quest=" + u,
+      "https://api.allorigins.win/raw?url=" + u,
+      "https://cors.eu.org/" + url,
+      "https://proxy.corsfix/" + url
+    ];
+  }
+
+  function corsFetch(url, opts) {
+    opts = opts || {};
+    var list = proxyUrls(url);
+    var i = 0;
+    function next() {
+      if (i >= list.length) {
+        return Promise.reject(new Error("CORS blocked: " + url));
+      }
+      var target = list[i++];
+      return fetch(target, Object.assign({ cache: "no-store" }, opts))
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r;
+        })
+        .catch(function () { return next(); });
+    }
+    return next();
+  }
+
+  function corsText(url) {
+    return corsFetch(url).then(function (r) { return r.text(); });
+  }
+
+  function corsJson(url) {
+    return corsFetch(url).then(function (r) { return r.json(); });
+  }
+
   const STATE_NAMES = {
     AL:"Alabama",AK:"Alaska",CA:"California",CT:"Connecticut",DE:"Delaware",FL:"Florida",GA:"Georgia",
     HI:"Hawaii",LA:"Louisiana",MA:"Massachusetts",MD:"Maryland",ME:"Maine",MS:"Mississippi",NC:"North Carolina",
@@ -685,35 +726,11 @@
   }
 
   function loadBuoys() {
-    // Full NDBC network from activestations.xml + live latest_obs.txt
-    // https://www.ndbc.noaa.gov/activestations.xml
-    // https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt
-    function withProxies(url) {
-      return [
-        url,
-        "https://corsproxy.io/?" + encodeURIComponent(url),
-        "https://api.allorigins.win/raw?url=" + encodeURIComponent(url)
-      ];
-    }
-
-    function fetchTextChain(urls, i) {
-      i = i || 0;
-      if (i >= urls.length) return Promise.reject(new Error("all failed"));
-      return fetch(urls[i], { cache: "no-store" })
-        .then(function (r) {
-          if (!r.ok) throw new Error(String(r.status));
-          return r.text();
-        })
-        .then(function (t) {
-          if (!t || t.length < 50) throw new Error("empty");
-          return t;
-        })
-        .catch(function () { return fetchTextChain(urls, i + 1); });
-    }
+    var catalogUrl = "https://www.ndbc.noaa.gov/activestations.xml";
+    var obsUrl = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt";
 
     function parseActiveStationsXml(xmlText) {
       var list = [];
-      // Attribute-based: <station id="..." lat="..." lon="..." name="..." .../>
       var re = /<station\s+([^>]+)\s*\/?>/gi;
       var m;
       while ((m = re.exec(xmlText)) !== null) {
@@ -728,10 +745,7 @@
         if (!id || !isFinite(lat) || !isFinite(lon)) continue;
         if (lat === 0 && lon === 0) continue;
         list.push({
-          id: id,
-          lat: lat,
-          lng: lon,
-          type: "buoy",
+          id: id, lat: lat, lng: lon, type: "buoy",
           name: attr("name") || ("NDBC " + id),
           owner: attr("owner") || "",
           program: attr("pgm") || "",
@@ -741,7 +755,7 @@
           hasCurrents: attr("currents") === "y",
           hasWaterQuality: attr("waterquality") === "y",
           hasDart: attr("dart") === "y",
-          _fresh: false
+          _fresh: false, hasObs: false
         });
       }
       return list;
@@ -751,92 +765,70 @@
       var byId = {};
       var lines = text.trim().split("\n");
       var i = 0;
-      while (i < lines.length && (lines[i].charAt(0) === "#" || /^\s*(YY|yr)/i.test(lines[i]))) i++;
-      if (i < 2) i = 2;
+      while (i < lines.length && (lines[i].charAt(0) === "#" || /^\s*(YY|yr|STN)/i.test(lines[i]))) i++;
       function mm(x) {
         if (x == null || x === "MM" || x === "999" || x === "99.0" || x === "9999.0") return null;
         return x;
       }
       for (; i < lines.length; i++) {
         var p = lines[i].trim().split(/\s+/);
-        if (p.length < 6) continue;
+        if (p.length < 15) continue;
+        // STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE
         var id = p[0];
         byId[id] = {
-          year: p[3], month: p[4], day: p[5],
-          hour: p[6], minute: p[7],
-          wdir: mm(p[8]),
-          wind: mm(p[9]),
-          gst: mm(p[10]),
-          wvht: mm(p[11]),
-          dpd: mm(p[12]),
-          apd: mm(p[13]),
-          mwd: mm(p[14]),
-          bar: mm(p[15]),
-          ptdy: mm(p[16]),
-          atmp: mm(p[17]),
-          wtmp: mm(p[18]),
-          dewp: mm(p[19]),
-          vis: mm(p[20]),
-          pwater: mm(p[21]),
-          tide: mm(p[22]),
-          obsTime: (p[3] && p[4] && p[5])
-            ? (p[3] + "-" + p[4] + "-" + p[5] + " " + (p[6] || "00") + ":" + (p[7] || "00") + " UTC")
-            : ""
+          lat: parseFloat(p[1]), lng: parseFloat(p[2]),
+          wdir: mm(p[8]), wind: mm(p[9]), gst: mm(p[10]),
+          wvht: mm(p[11]), dpd: mm(p[12]), apd: mm(p[13]), mwd: mm(p[14]),
+          bar: mm(p[15]), ptdy: mm(p[16]), atmp: mm(p[17]), wtmp: mm(p[18]),
+          dewp: mm(p[19]), vis: mm(p[20]), tide: mm(p[21]),
+          obsTime: p[3] + "-" + p[4] + "-" + p[5] + " " + p[6] + ":" + p[7] + " UTC",
+          hasObs: true, _fresh: true
         };
       }
       return byId;
     }
 
-    var catalogP = fetchTextChain(withProxies("https://www.ndbc.noaa.gov/activestations.xml"));
-    var obsP = fetchTextChain(withProxies("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"));
-
     return Promise.all([
-      catalogP.catch(function () { return null; }),
-      obsP.catch(function () { return null; })
+      corsText(catalogUrl).catch(function () { return null; }),
+      corsText(obsUrl).catch(function () { return null; })
     ]).then(function (pair) {
-      var xmlText = pair[0];
-      var obsText = pair[1];
-      var catalog = xmlText ? parseActiveStationsXml(xmlText) : [];
-      var obsMap = obsText ? parseLatestObs(obsText) : {};
+      var catalog = pair[0] ? parseActiveStationsXml(pair[0]) : [];
+      var obsMap = pair[1] ? parseLatestObs(pair[1]) : {};
 
-      // If catalog failed, build from obs only
-      if (!catalog.length && obsText) {
-        var lines = obsText.trim().split("\n");
-        var si = 2;
-        for (var li = si; li < lines.length; li++) {
-          var p = lines[li].trim().split(/\s+/);
-          if (p.length < 3) continue;
-          var lat = parseFloat(p[1]);
-          var lon = parseFloat(p[2]);
-          if (!isFinite(lat) || !isFinite(lon)) continue;
+      if (!catalog.length && pair[1]) {
+        Object.keys(obsMap).forEach(function (id) {
+          var o = obsMap[id];
+          if (!isFinite(o.lat) || !isFinite(o.lng)) return;
           catalog.push({
-            id: p[0], lat: lat, lng: lon, type: "buoy",
-            name: "NDBC " + p[0], owner: "", program: "", stationType: "",
-            hasMet: true, hasCurrents: false, hasWaterQuality: false, hasDart: false, _fresh: true
+            id: id, lat: o.lat, lng: o.lng, type: "buoy",
+            name: "NDBC " + id, owner: "", program: "", stationType: "buoy",
+            hasMet: true, hasCurrents: false, hasWaterQuality: false, hasDart: false
           });
-        }
+        });
       }
 
-      // Merge observations onto catalog
       catalog.forEach(function (b) {
         var o = obsMap[b.id];
         if (o) {
-          Object.keys(o).forEach(function (k) { b[k] = o[k]; });
-          b._fresh = true;
+          Object.keys(o).forEach(function (k) {
+            if (k !== "lat" && k !== "lng") b[k] = o[k];
+          });
+          // prefer catalog lat/lng; fill if missing
+          if (!b.lat) b.lat = o.lat;
+          if (!b.lng) b.lng = o.lng;
           b.hasObs = true;
-        } else {
-          b.hasObs = false;
+          b._fresh = true;
         }
       });
 
-      buoyStations = catalog;
+      buoyStations = catalog.filter(function (b) { return isFinite(b.lat) && isFinite(b.lng); });
       renderBuoys();
-      var withObs = catalog.filter(function (b) { return b.hasObs; }).length;
-      toast(catalog.length + " NDBC stations (" + withObs + " with live obs)", 2400);
-      if ($("#buoyCount")) $("#buoyCount").textContent = catalog.length.toLocaleString();
+      var withObs = buoyStations.filter(function (b) { return b.hasObs; }).length;
+      toast(buoyStations.length + " NDBC stations (" + withObs + " live)", 2400);
+      if ($("#buoyCount")) $("#buoyCount").textContent = buoyStations.length.toLocaleString();
     }).catch(function (e) {
       console.error("loadBuoys", e);
-      toast("NDBC network unavailable");
+      toast("NDBC load failed — try soft refresh");
       if ($("#buoyCount")) $("#buoyCount").textContent = "—";
     });
   }
@@ -1049,8 +1041,7 @@
         url = DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
           + "&product=predictions&datum=MLLW&units=english&time_zone=gmt&interval=h&format=json";
       }
-      return fetch(url)
-        .then(function (r) { return r.json(); })
+      return corsJson(url)
         .then(function (j) {
           if (token !== productOverlayToken) return;
           var row = null;
@@ -1211,8 +1202,7 @@
   function refreshWatch(w) {
     const url = DATAAPI + "?date=latest&station=" + encodeURIComponent(w.id) +
       "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json";
-    return fetch(url)
-      .then(function (r) { return r.json(); })
+    return corsJson(url)
       .then(function (j) {
         const d = j && j.data && j.data[0];
         if (d) {
@@ -1520,9 +1510,8 @@
     if (!box) return;
     const products = ["water_level", "air_temperature", "water_temperature", "wind", "air_pressure"];
     Promise.all(products.map(function (p) {
-      return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id) +
+      return corsJson(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id) +
         "&product=" + p + "&datum=MLLW&units=english&time_zone=gmt&format=json")
-        .then(function (r) { return r.json(); })
         .then(function (j) {
           return { product: p, data: (j && j.data && j.data[0]) || null };
         })
@@ -1564,8 +1553,7 @@
           "&station=" + encodeURIComponent(s.id) + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json";
       }
 
-      fetch(url)
-        .then(function (r) { return r.json(); })
+      corsJson(url)
         .then(function (j) {
           let pts = [];
           if (product === "predictions") {
@@ -1709,87 +1697,67 @@
     var box = win.querySelector("#buoySeries_" + b.id);
     var canvas = win.querySelector("#buoyChart_" + b.id);
     if (!box) return;
-    var urls = [
-      "https://www.ndbc.noaa.gov/data/realtime2/" + b.id + ".txt",
-      "https://corsproxy.io/?" + encodeURIComponent("https://www.ndbc.noaa.gov/data/realtime2/" + b.id + ".txt"),
-      "https://api.allorigins.win/raw?url=" + encodeURIComponent("https://www.ndbc.noaa.gov/data/realtime2/" + b.id + ".txt")
-    ];
-    function tryFetch(i) {
-      if (i >= urls.length) {
-        box.textContent = "Recent series unavailable for this station.";
-        return;
-      }
-      fetch(urls[i], { cache: "no-store" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("rt");
-          return r.text();
-        })
-        .then(function (text) {
-          var lines = text.trim().split("\n").filter(function (ln) {
-            return ln && ln.charAt(0) !== "#";
+    var rtUrl = "https://www.ndbc.noaa.gov/data/realtime2/" + encodeURIComponent(b.id) + ".txt";
+    corsText(rtUrl)
+      .then(function (text) {
+        var lines = text.trim().split("\n").filter(function (ln) {
+          return ln && ln.charAt(0) !== "#";
+        });
+        if (lines.length && /YY|year|yr/i.test(lines[0])) lines = lines.slice(1);
+        if (lines.length && /mo|dy|mm/i.test(lines[0])) lines = lines.slice(1);
+        var pts = [];
+        lines.slice(-72).forEach(function (ln) {
+          var p = ln.trim().split(/\s+/);
+          if (p.length < 15) return;
+          // YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP ...
+          var wtmp = p[14];
+          var wspd = p[6];
+          if (wtmp === "MM" && wspd === "MM") return;
+          pts.push({
+            t: (p[3] || "") + ":" + (p[4] || ""),
+            wtmp: wtmp !== "MM" ? +wtmp : null,
+            wind: wspd !== "MM" ? +wspd : null,
+            wvht: p[8] !== "MM" ? +p[8] : null
           });
-          // header may be first non-# line
-          if (lines.length && /YY|year/i.test(lines[0])) lines = lines.slice(1);
-          if (lines.length && /yr|mo|dy/i.test(lines[0])) lines = lines.slice(1);
-          var pts = [];
-          lines.slice(-72).forEach(function (ln) {
-            var p = ln.trim().split(/\s+/);
-            if (p.length < 15) return;
-            var wtmp = p[14];
-            var wspd = p[6];
-            if (wtmp === "MM" && wspd === "MM") return;
-            var label = (p[3] || "") + ":" + (p[4] || "");
-            pts.push({
-              t: label,
-              wtmp: wtmp !== "MM" ? +wtmp : null,
-              wind: wspd !== "MM" ? +wspd : null,
-              wvht: p[8] !== "MM" ? +p[8] : null
-            });
-          });
-          if (!pts.length) {
-            box.textContent = "No recent numeric samples in realtime file.";
-            return;
+        });
+        if (!pts.length) {
+          box.textContent = "No recent numeric samples in realtime file.";
+          return;
+        }
+        box.innerHTML = "<strong>" + pts.length + "</strong> samples from NDBC realtime2/" + b.id + ".txt";
+        if (canvas && typeof Chart !== "undefined") {
+          var chartKey = "buoy_rt_" + b.id;
+          if (chartInstances.has(chartKey)) {
+            try { chartInstances.get(chartKey).destroy(); } catch (e) {}
           }
-          box.innerHTML = "<strong>" + pts.length + "</strong> recent samples from NDBC realtime2/" + b.id + ".txt";
-          if (canvas && typeof Chart !== "undefined") {
-            var chartKey = "buoy_rt_" + b.id;
-            if (chartInstances.has(chartKey)) {
-              try { chartInstances.get(chartKey).destroy(); } catch (e) {}
-            }
-            var useWtmp = pts.some(function (p) { return p.wtmp != null; });
-            var data = pts.map(function (p) { return useWtmp ? p.wtmp : p.wind; });
-            var labels = pts.map(function (p) { return p.t; });
-            var chart = new Chart(canvas, {
-              type: "line",
-              data: {
-                labels: labels,
-                datasets: [{
-                  label: useWtmp ? "Water temp °C" : "Wind kn",
-                  data: data,
-                  borderColor: "#fb923c",
-                  backgroundColor: "rgba(251,146,60,0.12)",
-                  fill: true,
-                  tension: 0.25,
-                  pointRadius: 0,
-                  borderWidth: 1.5
-                }]
-              },
-              options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: true, labels: { color: "#8b9bb4", font: { size: 11 } } } },
-                scales: {
-                  x: { ticks: { color: "#5c6b82", maxTicksLimit: 6, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-                  y: { ticks: { color: "#5c6b82", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.06)" } }
-                }
+          var useWtmp = pts.some(function (p) { return p.wtmp != null; });
+          var chart = new Chart(canvas, {
+            type: "line",
+            data: {
+              labels: pts.map(function (p) { return p.t; }),
+              datasets: [{
+                label: useWtmp ? "Water temp °C" : "Wind m/s",
+                data: pts.map(function (p) { return useWtmp ? p.wtmp : p.wind; }),
+                borderColor: "#fb923c",
+                backgroundColor: "rgba(251,146,60,0.12)",
+                fill: true, tension: 0.25, pointRadius: 0, borderWidth: 1.5
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: true, labels: { color: "#8b9bb4", font: { size: 11 } } } },
+              scales: {
+                x: { ticks: { color: "#5c6b82", maxTicksLimit: 6, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+                y: { ticks: { color: "#5c6b82", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.06)" } }
               }
-            });
-            chartInstances.set(chartKey, chart);
-          }
-        })
-        .catch(function () { tryFetch(i + 1); });
-    }
-    tryFetch(0);
+            }
+          });
+          chartInstances.set(chartKey, chart);
+        }
+      })
+      .catch(function () {
+        box.textContent = "Recent series unavailable (CORS). Live obs still shown above.";
+      });
   }
 
   function openAlertWindow(a) {
@@ -1873,22 +1841,19 @@
   // id -> { overlay, onMove, opacity }
   let ncOverlays = {};
 
-  function buildExportUrl(serviceUrl, bounds, size, opacity) {
-    // Leaflet LatLngBounds → xmin,ymin,xmax,ymax in WGS84
-    var west = bounds.getWest();
-    var south = bounds.getSouth();
-    var east = bounds.getEast();
-    var north = bounds.getNorth();
-    // clamp slight overworld
-    if (west < -180) west = -180;
-    if (east > 180) east = 180;
-    if (south < -85) south = -85;
-    if (north > 85) north = 85;
-    var w = Math.max(64, Math.min(2048, Math.round(size.x)));
-    var h = Math.max(64, Math.min(2048, Math.round(size.y)));
+  function buildExportUrl(serviceUrl, bounds, size) {
+    // Use Web Mercator so the PNG matches Leaflet's projection (fixes misalignment / stretch)
+    var sw = L.CRS.EPSG3857.project(bounds.getSouthWest());
+    var ne = L.CRS.EPSG3857.project(bounds.getNorthEast());
+    var xmin = Math.min(sw.x, ne.x);
+    var ymin = Math.min(sw.y, ne.y);
+    var xmax = Math.max(sw.x, ne.x);
+    var ymax = Math.max(sw.y, ne.y);
+    var w = Math.max(64, Math.min(1920, Math.round(size.x)));
+    var h = Math.max(64, Math.min(1080, Math.round(size.y)));
     return serviceUrl + "/export"
-      + "?bbox=" + encodeURIComponent(west + "," + south + "," + east + "," + north)
-      + "&bboxSR=4326&imageSR=4326"
+      + "?bbox=" + encodeURIComponent(xmin + "," + ymin + "," + xmax + "," + ymax)
+      + "&bboxSR=3857&imageSR=3857"
       + "&size=" + w + "," + h
       + "&dpi=96&format=png32&transparent=true&f=image";
   }
@@ -1898,11 +1863,10 @@
     if (!entry || !map) return;
     var def = NC_SERVICES[id];
     if (!def || !def.url) return;
-    var bounds = map.getBounds().pad(0.02);
+    // Exact map bounds — no pad (pad caused overlap / drift)
+    var bounds = map.getBounds();
     var size = map.getSize();
-    var url = buildExportUrl(def.url, bounds, size);
-    // cache-bust so browsers don't stick on old frames
-    url += "&_ts=" + Date.now();
+    var url = buildExportUrl(def.url, bounds, size) + "&_ts=" + Date.now();
 
     if (entry.overlay) {
       entry.overlay.setUrl(url);
@@ -1913,7 +1877,8 @@
         opacity: entry.opacity,
         interactive: false,
         className: "nc-export-overlay",
-        zIndex: 400
+        zIndex: 350 + Object.keys(ncOverlays).length,
+        crossOrigin: true
       });
       entry.overlay.addTo(map);
     }
@@ -1927,8 +1892,14 @@
     ncOverlays[id] = { overlay: null, opacity: opacity, onMove: null };
     var refresh = function () { refreshExportOverlay(id); };
     ncOverlays[id].onMove = refresh;
-    map.on("moveend", refresh);
-    map.on("zoomend", refresh);
+    var tmr = null;
+    var debounced = function () {
+      clearTimeout(tmr);
+      tmr = setTimeout(refresh, 400);
+    };
+    map.on("moveend", debounced);
+    map.on("zoomend", debounced);
+    ncOverlays[id].onMove = debounced;
     refresh();
     if (def.label) toast(def.label + " on", 1600);
   }
