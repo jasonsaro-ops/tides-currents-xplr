@@ -1,3510 +1,1171 @@
-/* TIDES & CURRENTS XPLR
-   NOAA CO-OPS powered dashboard — Martian ARM aesthetic
-   Updated: full coastal states, richer station modal, Mid-Atlantic pin,
-   2-min realtime, SOL chime, watch mode, product overlays on map
-*/
+/**
+ * TIDES & CURRENTS XPLR
+ * Elite NOAA tides / currents / coastal intelligence dashboard
+ * Soft-refresh every 2 min · Floating metadata windows · Layout save/load
+ */
 
-const MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi";
-const DATAAPI = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter";
+(() => {
+  "use strict";
 
-// State
-let allStations = [];
-let waterStations = [];
-let currentStations = [];
-let markersLayer = null;
-let clusterGroup = null;
-let map = null;
-let currentBasemap = null;
-let selectedStation = null;
-let chartInstance = null;
-let useClusters = true;
-let watchedStation = null;
-let lastDataHash = {};          // for detecting updates → chime
-let overlayMode = "none";       // none | water_level | air_temperature | ... | all
-let latestValues = {};          // stationId -> {product: value}
-let buoyStations = [];          // NDBC buoys from latest_obs
-let showBuoys = true;
-let soundEnabled = true;
-let watchedList = [];           // array of {id, name, type, data}
-let buoyLayer = null;
-let tidePredStations = [];
-let showTidePred = true;
-let tidePredLayer = null;
-let nwsAlerts = [];
-let nwsAlertLayer = null;
-let showWarnings = true;
-let freshIds = new Set();       // stations with recent data updates (for pulse)
-
-// Priority Mid-Atlantic stations (pinned top of Active)
-const MID_ATLANTIC_PRIORITY = [
-  "8534720", // Atlantic City, NJ
-  "8536110", // Cape May, NJ
-  "8551910", // Reedy Point, DE
-  "8557380", // Lewes, DE
-  "8545240", // Philadelphia (Pier 11), PA
-  "8545530", // Marcus Hook, PA
-  "8574680", // Baltimore, MD
-  "8575512", // Annapolis, MD
-  "8571892", // Cambridge, MD
-  "8577330", // Solomons Island, MD
-  "8638610", // Sewells Point, VA (nearby)
-  "8632200"  // Kiptopeke, VA
-];
-
-// Broader highlight pool
-const HIGHLIGHT_IDS = [
-  ...MID_ATLANTIC_PRIORITY,
-  // Major coastal / PORTS highlights for active feed
-  "9414290", "8518750", "8723214", "9447130", "8761724",
-  "8452660", "1612340", "9414750", "8771450", "9410840",
-  "8726520", "8665530", "8443970", "8729840", "8760922",
-  "8531680", "8510560", "8461490", "8418150", "8639348",
-  "8651370", "8656483", "8670870", "8724580", "8725110",
-  "8735180", "8762482", "8775870", "9410230", "9439040",
-  "9444900", "9450460", "1617760", "9751639", "9755371"
-];
-
-// All US coastal + Great Lakes + territories for Quick States
-const COASTAL_STATES = [
-  "AK","AL","CA","CT","DE","FL","GA","HI","LA","ME","MD","MA",
-  "MS","NH","NJ","NY","NC","OR","PA","RI","SC","TX","VA","WA",
-  "DC","PR","VI","GU","AS","MP"
-];
-
-// ========== INIT ==========
-
-
-function initSplitters() {
-  const root = document.documentElement;
-  const saved = JSON.parse(localStorage.getItem("tcx_layout") || "{}");
-  if (saved.leftW) root.style.setProperty("--left-w", saved.leftW + "px");
-  if (saved.rightW) root.style.setProperty("--right-w", saved.rightW + "px");
-
-  document.querySelectorAll(".splitter-v").forEach(sp => {
-    let dragging = false;
-    sp.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      dragging = true;
-      sp.classList.add("dragging");
-      const which = sp.dataset.split;
-      const onMove = (ev) => {
-        if (!dragging) return;
-        const grid = document.querySelector(".main-grid");
-        if (!grid) return;
-        const rect = grid.getBoundingClientRect();
-        if (which === "left") {
-          const w = Math.min(360, Math.max(160, ev.clientX - rect.left));
-          root.style.setProperty("--left-w", w + "px");
-        } else {
-          const w = Math.min(380, Math.max(180, rect.right - ev.clientX));
-          root.style.setProperty("--right-w", w + "px");
-        }
-        if (map) map.invalidateSize();
-      };
-      const onUp = () => {
-        dragging = false;
-        sp.classList.remove("dragging");
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-        const lw = parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 220;
-        const rw = parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 240;
-        localStorage.setItem("tcx_layout", JSON.stringify({ leftW: lw, rightW: rw }));
-        if (map) map.invalidateSize();
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    });
-  });
-}
-
-
-// ========== LAYOUT JSON SERIALIZATION ==========
-function collectLayoutState() {
-  const root = document.documentElement;
-  const collapsed = {};
-  document.querySelectorAll(".panel-section").forEach((sec, i) => {
-    const title = sec.querySelector(".sec-title")?.textContent?.trim() || ("sec_" + i);
-    collapsed[title] = sec.classList.contains("collapsed");
-  });
-  const nc = {};
-  document.querySelectorAll("input[data-nc]").forEach(cb => {
-    nc[cb.dataset.nc] = !!cb.checked;
-  });
-  const usgs = {};
-  document.querySelectorAll("input[data-usgs]").forEach(cb => {
-    usgs[cb.dataset.usgs] = !!cb.checked;
-  });
-  const center = map ? map.getCenter() : null;
-  return {
-    version: 1,
-    savedAt: new Date().toISOString(),
-    panels: {
-      leftW: parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 220,
-      rightW: parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 240
-    },
-    collapsed,
-    basemap: document.querySelector(".bm-btn.active")?.dataset?.bm || "dark",
-    map: center ? { lat: center.lat, lng: center.lng, zoom: map.getZoom() } : null,
-    layers: { nc, usgs },
-    watches: (typeof watchedList !== "undefined" ? watchedList : []).map(w => ({
-      id: w.id, name: w.name, type: w.type, state: w.state
-    })),
-    soundOn: document.getElementById("soundToggle")?.textContent?.includes("ON") ?? true
+  // ========== CONSTANTS & STATE ==========
+  const MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi";
+  const DATAAPI = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter";
+  const REFRESH_MS = 120000; // 2 minutes
+  const COASTAL_STATES = [
+    "AL","AK","CA","CT","DE","FL","GA","HI","LA","MA","MD","ME","MS","NC","NH","NJ","NY","OR","PA","RI","SC","TX","VA","WA","AS","GU","MP","PR","VI"
+  ];
+  const STATE_NAMES = {
+    AL:"Alabama",AK:"Alaska",CA:"California",CT:"Connecticut",DE:"Delaware",FL:"Florida",GA:"Georgia",
+    HI:"Hawaii",LA:"Louisiana",MA:"Massachusetts",MD:"Maryland",ME:"Maine",MS:"Mississippi",NC:"North Carolina",
+    NH:"New Hampshire",NJ:"New Jersey",NY:"New York",OR:"Oregon",PA:"Pennsylvania",RI:"Rhode Island",
+    SC:"South Carolina",TX:"Texas",VA:"Virginia",WA:"Washington",AS:"American Samoa",GU:"Guam",MP:"N. Mariana",
+    PR:"Puerto Rico",VI:"U.S. Virgin Islands"
   };
-}
 
-function applyLayoutState(state) {
-  if (!state || typeof state !== "object") return;
-  const root = document.documentElement;
-  if (state.panels?.leftW) root.style.setProperty("--left-w", state.panels.leftW + "px");
-  if (state.panels?.rightW) root.style.setProperty("--right-w", state.panels.rightW + "px");
+  let map = null;
+  let markersLayer = null;
+  let buoyLayer = null;
+  let nwsAlertLayer = null;
+  let stations = [];
+  let buoyStations = [];
+  let nwsAlerts = [];
+  let watched = []; // { id, station, data, lastFetch }
+  let floatWindows = new Map(); // key -> { el, z }
+  let floatZ = 1000;
+  let chartInstances = new Map();
+  let refreshTimer = null;
+  let countdownTimer = null;
+  let nextRefreshAt = 0;
+  let soundEnabled = localStorage.getItem("tcx_sound") !== "0";
+  let currentBasemap = "dark";
+  let basemapLayers = {};
+  let radarState = { playing: false, frames: [], idx: 0, layer: null, timer: null };
 
-  if (state.collapsed) {
-    document.querySelectorAll(".panel-section").forEach((sec) => {
-      const title = sec.querySelector(".sec-title")?.textContent?.trim();
-      if (title && state.collapsed[title]) sec.classList.add("collapsed");
-      else sec.classList.remove("collapsed");
+  // ========== UTILS ==========
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+  function toast(msg, ms = 2800) {
+    const el = $("#toast");
+    el.textContent = msg;
+    el.classList.remove("hidden");
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.add("hidden"), ms);
+  }
+
+  function fmtNum(n, d = 2) {
+    if (n == null || Number.isNaN(+n)) return "—";
+    return (+n).toFixed(d);
+  }
+
+  function utcNow() {
+    const d = new Date();
+    return d.toISOString().slice(11, 19);
+  }
+
+  function playChime() {
+    if (!soundEnabled) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine"; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.08, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(); o.stop(ctx.currentTime + 0.4);
+    } catch (_) {}
+  }
+
+  // ========== LAYOUT SAVE / LOAD ==========
+  function collectLayout() {
+    const root = document.documentElement;
+    const collapsed = {};
+    $$(".panel").forEach((p, i) => {
+      const t = p.querySelector("h2")?.textContent?.trim() || `p${i}`;
+      collapsed[t] = p.classList.contains("collapsed");
     });
+    const nc = {};
+    $$("input[data-nc]").forEach(cb => { nc[cb.dataset.nc] = cb.checked; });
+    const usgs = {};
+    $$("input[data-usgs]").forEach(cb => { usgs[cb.dataset.usgs] = cb.checked; });
+    return {
+      version: 2,
+      savedAt: new Date().toISOString(),
+      leftW: parseInt(getComputedStyle(root).getPropertyValue("--left-w")) || 280,
+      rightW: parseInt(getComputedStyle(root).getPropertyValue("--right-w")) || 320,
+      collapsed,
+      layers: { nc, usgs },
+      basemap: currentBasemap,
+      filters: {
+        state: $("#stateFilter").value,
+        type: $("#typeFilter").value,
+        product: $("#productFilter").value,
+        showWaterLevels: $("#showWaterLevels").checked,
+        showCurrents: $("#showCurrents").checked,
+        showPorts: $("#showPorts").checked,
+        showWarnings: $("#showWarnings").checked,
+        showBuoys: $("#showBuoys").checked,
+      },
+      map: map ? { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() } : null,
+      watches: watched.map(w => w.id),
+    };
   }
 
-  if (state.basemap && typeof setBasemap === "function") {
-    try { setBasemap(state.basemap); } catch (_) {}
+  function applyLayout(state) {
+    if (!state || typeof state !== "object") return;
+    const root = document.documentElement;
+    if (state.leftW) root.style.setProperty("--left-w", state.leftW + "px");
+    if (state.rightW) root.style.setProperty("--right-w", state.rightW + "px");
+    if (state.collapsed) {
+      $$(".panel").forEach(p => {
+        const t = p.querySelector("h2")?.textContent?.trim();
+        if (t && state.collapsed[t]) p.classList.add("collapsed");
+        else p.classList.remove("collapsed");
+      });
+    }
+    if (state.layers?.nc) {
+      Object.entries(state.layers.nc).forEach(([k, on]) => {
+        const cb = $(`input[data-nc="${k}"]`);
+        if (cb) { cb.checked = !!on; cb.dispatchEvent(new Event("change")); }
+      });
+    }
+    if (state.layers?.usgs) {
+      Object.entries(state.layers.usgs).forEach(([k, on]) => {
+        const cb = $(`input[data-usgs="${k}"]`);
+        if (cb) { cb.checked = !!on; cb.dispatchEvent(new Event("change")); }
+      });
+    }
+    if (state.basemap) setBasemap(state.basemap);
+    if (state.filters) {
+      const f = state.filters;
+      if (f.state != null) $("#stateFilter").value = f.state;
+      if (f.type != null) $("#typeFilter").value = f.type;
+      if (f.product != null) $("#productFilter").value = f.product;
+      if (f.showWaterLevels != null) $("#showWaterLevels").checked = f.showWaterLevels;
+      if (f.showCurrents != null) $("#showCurrents").checked = f.showCurrents;
+      if (f.showPorts != null) $("#showPorts").checked = f.showPorts;
+      if (f.showWarnings != null) $("#showWarnings").checked = f.showWarnings;
+      if (f.showBuoys != null) $("#showBuoys").checked = f.showBuoys;
+      applyFilters();
+    }
+    if (state.map && map) {
+      map.setView([state.map.lat, state.map.lng], state.map.zoom);
+    }
+    if (Array.isArray(state.watches)) {
+      watched = [];
+      state.watches.forEach(id => {
+        const s = stations.find(x => x.id === id) || buoyStations.find(x => x.id === id);
+        if (s) addWatch(s, true);
+      });
+      renderWatches();
+    }
+    if (map) map.invalidateSize();
+    saveLayoutLocal();
   }
 
-  if (state.map && map) {
-    map.setView([state.map.lat, state.map.lng], state.map.zoom || 6);
+  function saveLayoutLocal() {
+    try { localStorage.setItem("tcx_layout_v2", JSON.stringify(collectLayout())); } catch (_) {}
   }
 
-  if (state.layers?.nc) {
-    Object.entries(state.layers.nc).forEach(([k, on]) => {
-      const cb = document.querySelector(`input[data-nc="${k}"]`);
-      if (cb && cb.checked !== !!on) {
-        cb.checked = !!on;
-        cb.dispatchEvent(new Event("change"));
-      }
-    });
-  }
-  if (state.layers?.usgs) {
-    Object.entries(state.layers.usgs).forEach(([k, on]) => {
-      const cb = document.querySelector(`input[data-usgs="${k}"]`);
-      if (cb && cb.checked !== !!on) {
-        cb.checked = !!on;
-        cb.dispatchEvent(new Event("change"));
-      }
-    });
+  function loadLayoutLocal() {
+    try {
+      const raw = localStorage.getItem("tcx_layout_v2");
+      if (raw) applyLayout(JSON.parse(raw));
+    } catch (_) {}
   }
 
-  if (Array.isArray(state.watches) && typeof watchedList !== "undefined") {
-    // restore watch list ids — soft add if not present
-    state.watches.forEach(w => {
-      if (!watchedList.find(x => x.id === w.id)) {
-        watchedList.push({ id: w.id, name: w.name, type: w.type || "waterlevels", state: w.state, data: {}, expanded: false });
-      }
-    });
-    if (typeof renderWatchSlots === "function") renderWatchSlots();
-    if (typeof refreshAllWatches === "function") refreshAllWatches();
+  function exportLayout() {
+    const blob = new Blob([JSON.stringify(collectLayout(), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `tcx-layout-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("Layout exported");
   }
 
-  localStorage.setItem("tcx_layout", JSON.stringify({
-    leftW: state.panels?.leftW,
-    rightW: state.panels?.rightW,
-    full: state
-  }));
-  if (map) setTimeout(() => map.invalidateSize(), 200);
-  showToast("Layout applied");
-}
-
-function saveLayoutToStorage() {
-  const state = collectLayoutState();
-  localStorage.setItem("tcx_layout_full", JSON.stringify(state));
-  localStorage.setItem("tcx_layout", JSON.stringify({
-    leftW: state.panels.leftW,
-    rightW: state.panels.rightW,
-    full: state
-  }));
-  showToast("Workspace saved");
-}
-
-function loadLayoutFromStorage() {
-  try {
-    const raw = localStorage.getItem("tcx_layout_full") || localStorage.getItem("tcx_layout");
-    if (!raw) { showToast("No saved layout"); return; }
-    const parsed = JSON.parse(raw);
-    applyLayoutState(parsed.full || parsed);
-  } catch (e) {
-    showToast("Load failed");
-  }
-}
-
-function exportLayoutJson() {
-  const state = collectLayoutState();
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `tides-currents-xplr-layout-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  showToast("Layout JSON exported");
-}
-
-function resetLayout() {
-  document.documentElement.style.setProperty("--left-w", "220px");
-  document.documentElement.style.setProperty("--right-w", "240px");
-  document.querySelectorAll(".panel-section.collapsed").forEach(s => s.classList.remove("collapsed"));
-  localStorage.removeItem("tcx_layout");
-  localStorage.removeItem("tcx_layout_full");
-  if (map) map.invalidateSize();
-  showToast("Layout reset");
-}
-
-function bindLayoutUI() {
-  document.getElementById("saveLayoutBtn")?.addEventListener("click", saveLayoutToStorage);
-  document.getElementById("loadLayoutBtn")?.addEventListener("click", loadLayoutFromStorage);
-  document.getElementById("exportLayoutBtn")?.addEventListener("click", exportLayoutJson);
-  document.getElementById("resetLayoutBtn")?.addEventListener("click", resetLayout);
-  document.getElementById("layoutFileInput")?.addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  async function importLayoutFile(file) {
     try {
       const text = await file.text();
-      applyLayoutState(JSON.parse(text));
-    } catch (_) {
-      showToast("Invalid layout file");
+      applyLayout(JSON.parse(text));
+      toast("Layout imported");
+    } catch (e) {
+      toast("Invalid layout file");
     }
-    e.target.value = "";
-  });
-  // LOAD also offers file if shift-click
-  document.getElementById("loadLayoutBtn")?.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    document.getElementById("layoutFileInput")?.click();
-  });
-}
+  }
 
-// ========== POPOUT WINDOWS ==========
-const popoutWindows = {};
-
-function openPopoutWindow(key, title, htmlBody, width = 480, height = 640) {
-  try {
-    if (popoutWindows[key] && !popoutWindows[key].closed) {
-      popoutWindows[key].focus();
-      return popoutWindows[key];
+  async function loadLayoutFromUrl(url) {
+    try {
+      toast("Loading layout…");
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(r.status);
+      applyLayout(await r.json());
+      toast("Layout loaded from URL");
+    } catch (e) {
+      toast("Failed to load layout URL");
     }
-  } catch (_) {}
-
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
-<title>${title.replace(/</g, "")}</title>
-<style>
-  body{margin:0;background:#0a0c0f;color:#e8ecef;font-family:"Share Tech Mono",monospace;font-size:12px;padding:12px}
-  h1{font-size:14px;color:#e67e22;margin:0 0 10px;letter-spacing:0.08em}
-  a{color:#e67e22}
-  .meta{color:#8b9aab;margin-bottom:10px}
-  pre{white-space:pre-wrap;background:#11161d;padding:10px;border:1px solid #1e252e}
-  iframe{width:100%;height:280px;border:1px solid #2a3340;background:#fff}
-</style></head><body>
-<h1>${title.replace(/</g, "")}</h1>
-${htmlBody}
-</body></html>`;
-
-  const win = window.open("", `tcx_${key}`, `width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no`);
-  if (!win) {
-    showToast("Pop-out blocked — allow pop-ups for this site");
-    return null;
   }
-  win.document.write(doc);
-  win.document.close();
-  popoutWindows[key] = win;
-  return win;
-}
 
-function popoutStation(station) {
-  if (!station) return;
-  const id = station.id || station;
-  const name = station.name || id;
-  const html = `
-    <div class="meta">Station ${id}</div>
-    <p><a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${id}" target="_blank">NOAA station page ↗</a></p>
-    <p><a href="https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${id}" target="_blank">Tide predictions ↗</a></p>
-    <iframe src="https://tidesandcurrents.noaa.gov/stationhome.html?id=${id}" title="NOAA"></iframe>
-    <p style="color:#5a6a7a;font-size:10px;margin-top:8px">Live charts may be limited by NOAA framing. Use links above if embed is blank.</p>
-  `;
-  openPopoutWindow("st_" + id, `STATION // ${name}`, html, 520, 700);
-}
-
-function popoutWatchCard(w) {
-  if (!w) return;
-  const d = w.data || {};
-  const vals = d.v != null ? `${d.v} ft` : (d.s != null ? `${d.s} kn` : "—");
-  const html = `
-    <div class="meta">${w.type || "station"} · ${w.state || ""}</div>
-    <pre>Latest: ${vals}
-Updated: ${w.updated || "—"}
-ID: ${w.id}</pre>
-    <p><a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${w.id}" target="_blank">Open NOAA page ↗</a></p>
-    <button onclick="window.opener && window.opener.focus()">Back to dashboard</button>
-  `;
-  openPopoutWindow("watch_" + w.id, `WATCH // ${w.name || w.id}`, html, 420, 480);
-}
-
-
-function initCollapsibleSections() {
-  document.querySelectorAll(".panel-section .section-header").forEach(hdr => {
-    if (hdr.querySelector(".collapse-btn")) return;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "collapse-btn";
-    btn.title = "Collapse / expand";
-    btn.textContent = ""; btn.setAttribute("aria-label", "Collapse");
-    hdr.appendChild(btn);
-    const toggle = (e) => {
-      e?.stopPropagation?.();
-      const sec = hdr.closest(".panel-section");
-      if (!sec) return;
-      sec.classList.toggle("collapsed");
-      btn.setAttribute("aria-expanded", sec.classList.contains("collapsed") ? "false" : "true");
-      if (typeof map !== "undefined" && map) setTimeout(() => map.invalidateSize(), 200);
-    };
-    btn.addEventListener("click", toggle);
-    hdr.addEventListener("dblclick", toggle);
-  });
-}
-
-function initExtraZoomControls() {
-  document.getElementById("zoomInBtn")?.addEventListener("click", () => map?.zoomIn());
-  document.getElementById("zoomOutBtn")?.addEventListener("click", () => map?.zoomOut());
-  document.getElementById("zoomWorldBtn")?.addEventListener("click", () => map?.setView([20, -40], 3));
-  document.getElementById("zoomConusBtn")?.addEventListener("click", () => map?.fitBounds([[24.5, -125], [49.5, -66]]));
-  document.getElementById("zoomRegionBtn")?.addEventListener("click", () => map?.fitBounds([[37.8, -77.5], [41.2, -73.8]]));
-}
-
-document.addEventListener("DOMContentLoaded", async () => {
-  // three-column layout (docking removed for clarity)
-
-  setInterval(() => { if (typeof loadNwsWarnings === 'function') loadNwsWarnings(); }, 5 * 60 * 1000);
-  initClock();
-  initMap();
-  if (typeof initRainViewer === 'function') initRainViewer();
-  bindUI();
-  if (typeof bindNowcoastUI === 'function') bindNowcoastUI();
-  if (typeof initCollapsibleSections === 'function') initCollapsibleSections();
-  if (typeof initExtraZoomControls === 'function') initExtraZoomControls();
-  // column resize disabled — fixed widths
-
-  if (typeof bindLayoutUI === 'function') bindLayoutUI();
-  // auto-restore full layout if present
-  try {
-    const raw = localStorage.getItem('tcx_layout_full');
-    if (raw) { /* apply after data load */ window.__tcxPendingLayout = JSON.parse(raw); }
-  } catch(_){}
-
-  setTimeout(() => { try { map && map.invalidateSize(); } catch(_){} }, 300);
-  await loadStations();
-  await loadBuoys();
-  await loadTidePredStations();
-  loadNwsWarnings();
-  populateFilters();
-  populateWatchDropdowns();
-  if (window.__tcxPendingLayout && typeof applyLayoutState === 'function') {
-    setTimeout(() => applyLayoutState(window.__tcxPendingLayout), 500);
+  // ========== FLOATING WINDOWS ==========
+  function bringToFront(win) {
+    floatZ += 1;
+    win.style.zIndex = floatZ;
   }
-  renderMarkers();
-  loadActivePanel();
-  // Realtime refresh every 2 minutes
-  setInterval(() => {
-    loadActivePanel(true);
-    refreshAllWatches();
-    if (selectedStation) {
-      const activeTab = document.querySelector(".tab.active");
-      if (activeTab && activeTab.dataset.tab === "latest") loadTab("latest", true);
+
+  function closeFloat(key) {
+    const entry = floatWindows.get(key);
+    if (!entry) return;
+    const chart = chartInstances.get(key);
+    if (chart) { chart.destroy(); chartInstances.delete(key); }
+    entry.el.remove();
+    floatWindows.delete(key);
+  }
+
+  function openFloat(key, title, sub, bodyHtml, opts = {}) {
+    if (floatWindows.has(key)) {
+      bringToFront(floatWindows.get(key).el);
+      return floatWindows.get(key).el;
     }
-  }, 2 * 60 * 1000);
-});
+    const layer = $("#floatLayer");
+    const win = document.createElement("div");
+    win.className = "float-win";
+    win.dataset.key = key;
+    const w = opts.width || 440;
+    const h = opts.height || null;
+    // cascade position
+    const offset = (floatWindows.size % 8) * 28;
+    win.style.left = Math.min(80 + offset, window.innerWidth - w - 20) + "px";
+    win.style.top = Math.min(70 + offset, window.innerHeight - 200) + "px";
+    win.style.width = w + "px";
+    if (h) win.style.height = h + "px";
 
-// ========== CLOCK ==========
-function initClock() {
-  const el = document.getElementById("utcClock");
-  function tick() {
-    el.textContent = new Date().toISOString().substr(11, 8);
-  }
-  tick();
-  setInterval(tick, 1000);
-}
-
-// ========== SOL CHIME (Web Audio approximation of The Martian Sol ping) ==========
-function playSolChime() {
-  if (!soundEnabled) return;
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const now = ctx.currentTime;
-
-    // Main bright ping
-    const osc1 = ctx.createOscillator();
-    const gain1 = ctx.createGain();
-    osc1.type = "sine";
-    osc1.frequency.setValueAtTime(1240, now);
-    osc1.frequency.exponentialRampToValueAtTime(880, now + 0.18);
-    gain1.gain.setValueAtTime(0.28, now);
-    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-    osc1.connect(gain1);
-    gain1.connect(ctx.destination);
-    osc1.start(now);
-    osc1.stop(now + 0.5);
-
-    // Secondary higher harmonic (the "digital" edge)
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = "triangle";
-    osc2.frequency.setValueAtTime(1760, now);
-    gain2.gain.setValueAtTime(0.12, now);
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-    osc2.connect(gain2);
-    gain2.connect(ctx.destination);
-    osc2.start(now);
-    osc2.stop(now + 0.3);
-
-    // Soft low thump
-    const osc3 = ctx.createOscillator();
-    const gain3 = ctx.createGain();
-    osc3.type = "sine";
-    osc3.frequency.setValueAtTime(180, now);
-    gain3.gain.setValueAtTime(0.15, now);
-    gain3.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-    osc3.connect(gain3);
-    gain3.connect(ctx.destination);
-    osc3.start(now);
-    osc3.stop(now + 0.22);
-  } catch (e) {
-    console.warn("Audio chime failed", e);
-  }
-}
-
-// ========== MAP ==========
-
-function scrubBottomChrome() {
-  try {
-    document.querySelectorAll(".leaflet-bottom, .leaflet-control-attribution, .leaflet-control-scale").forEach(el => {
-      el.style.display = "none";
-      el.remove();
-    });
-  } catch (_) {}
-}
-
-function initMap() {
-  map = L.map("map", {
-    center: [39.0, -75.5], // Mid-Atlantic default bias
-    zoom: 6,
-    zoomControl: false,
-    attributionControl: false
-  });
-  // ensure no bottom chrome leaks outside map
-  scrubBottomChrome(); setTimeout(scrubBottomChrome, 500); setTimeout(scrubBottomChrome, 2000);
-
-  // Zoom +/- top-right so they don't cover bottom/left data
-  // custom zoom stack only — avoid overlapping Leaflet control
-
-  setBasemap("dark");
-
-  map.on("mousemove", (e) => {
-    document.getElementById("mapCoords").textContent =
-      `LAT ${e.latlng.lat.toFixed(4)}  LON ${e.latlng.lng.toFixed(4)}`;
-  });
-  map.on("zoomend", () => {
-    document.getElementById("zoomLevel").textContent = `Z ${map.getZoom()}`;
-  });
-  document.getElementById("zoomLevel").textContent = `Z ${map.getZoom()}`;
-
-  // attribution disabled — sources listed in right panel
-}
-
-function setBasemap(type) {
-  if (currentBasemap) map.removeLayer(currentBasemap);
-
-  const attributions = {
-    dark: "Esri, TomTom, Garmin, FAO, NOAA, USGS",
-    imagery: "Esri, Maxar, Earthstar Geographics",
-    topo: "Esri, USGS, NOAA",
-    streets: "Esri, TomTom, Garmin, FAO, NOAA, USGS",
-    ocean: "Esri, GEBCO, NOAA, National Geographic, Garmin"
-  };
-
-  if (type === "dark") currentBasemap = L.esri.basemapLayer("DarkGray");
-  else if (type === "imagery") currentBasemap = L.esri.basemapLayer("Imagery");
-  else if (type === "topo") currentBasemap = L.esri.basemapLayer("Topographic");
-  else if (type === "streets") currentBasemap = L.esri.basemapLayer("Streets");
-  else if (type === "ocean") currentBasemap = L.esri.basemapLayer("Oceans");
-
-  currentBasemap.addTo(map);
-
-  document.querySelectorAll(".bm-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.bm === type);
-  });
-}
-
-// ========== DATA LOADING ==========
-async function loadStations() {
-  showToast("Loading NOAA station inventory...");
-  try {
-    const [wlRes, curRes] = await Promise.all([
-      fetch(`${MDAPI}/stations.json?type=waterlevels&status=active`).then((r) => r.json()),
-      fetch(`${MDAPI}/stations.json?type=currents&status=active`).then((r) => r.json())
-    ]);
-
-    waterStations = (wlRes.stations || []).map((s) => ({
-      ...s,
-      type: "waterlevels",
-      isPorts: !!(s.portscode || (s.affiliations && String(s.affiliations).includes("PORTS"))),
-      lat: s.lat,
-      lng: s.lng
-    }));
-
-    currentStations = (curRes.stations || []).map((s) => ({
-      ...s,
-      type: "currents",
-      isPorts: true,
-      lat: s.lat,
-      lng: s.lng,
-      state: s.state || inferState(s.lat, s.lng)
-    }));
-
-    allStations = [...waterStations, ...currentStations];
-
-    const sc = document.getElementById("stationCount");
-    if (sc) sc.textContent = allStations.length;
-    const bc = document.getElementById("buoyCount");
-    // buoy count set later by loadBuoys
-    showToast(`Loaded ${waterStations.length} water + ${currentStations.length} current stations`);
-  } catch (err) {
-    console.error(err);
-    showToast("Failed to load stations");
-  }
-}
-
-function inferState(lat, lng) {
-  if (lat > 38.5 && lat < 41.5 && lng > -75.6 && lng < -73.8) return "NJ";
-  if (lat > 39.5 && lat < 41.5 && lng > -76.5 && lng < -74.5) return "PA";
-  if (lat > 38.4 && lat < 39.9 && lng > -75.8 && lng < -74.9) return "DE";
-  if (lat > 37.8 && lat < 39.8 && lng > -77.5 && lng < -75.0) return "MD";
-  return "";
-}
-
-// ========== FILTERS & MARKERS ==========
-function populateFilters() {
-  const states = [...new Set(allStations.map((s) => s.state).filter(Boolean))].sort();
-  const sel = document.getElementById("stateFilter");
-  states.forEach((st) => {
-    const opt = document.createElement("option");
-    opt.value = st;
-    opt.textContent = st;
-    sel.appendChild(opt);
-  });
-
-  // Full coastal quick states
-  const qs = document.getElementById("quickStates");
-  qs.innerHTML = "";
-  COASTAL_STATES.forEach((st) => {
-    if (states.includes(st) || ["PA","DC","PR","VI","GU","AS","MP"].includes(st)) {
-      const btn = document.createElement("button");
-      btn.className = "qs-btn";
-      btn.textContent = st;
-      btn.onclick = () => {
-        document.getElementById("stateFilter").value = st;
-        applyFilters();
-      };
-      qs.appendChild(btn);
-    }
-  });
-}
-
-function getFilteredStations() {
-  const state = document.getElementById("stateFilter").value;
-  const type = document.getElementById("typeFilter").value;
-  const showWL = document.getElementById("showWaterLevels").checked;
-  const showCur = document.getElementById("showCurrents").checked;
-  const portsOnly = document.getElementById("showPorts").checked;
-
-  return allStations.filter((s) => {
-    if (state && s.state !== state) return false;
-    if (type === "waterlevels" && s.type !== "waterlevels") return false;
-    if (type === "currents" && s.type !== "currents") return false;
-    if (type === "ports" && !s.isPorts) return false;
-    if (type === "met") return s.type === "waterlevels";
-    if (!showWL && s.type === "waterlevels") return false;
-    if (!showCur && s.type === "currents") return false;
-    if (portsOnly && !s.isPorts) return false;
-    return true;
-  });
-}
-
-function colorForOverlay(station) {
-  if (overlayMode === "none") {
-    if (station.type === "currents") return "#00b894";
-    if (station.isPorts) return "#e67e22";
-    return "#3498db";
-  }
-  const vals = latestValues[station.id];
-  if (!vals) return "#555";
-
-  if (overlayMode === "all") {
-    // multi-hue based on presence
-    if (vals.water_level != null) return "#3498db";
-    if (vals.currents != null) return "#00b894";
-    if (vals.air_temperature != null) return "#e74c3c";
-    return "#888";
-  }
-
-  const v = vals[overlayMode];
-  if (v == null) return "#444";
-
-  // simple sequential color scales
-  if (overlayMode === "water_level") {
-    // blue → cyan → yellow → red for higher water
-    const t = Math.max(0, Math.min(1, (parseFloat(v) + 2) / 8));
-    return lerpColor("#2980b9", "#f1c40f", t);
-  }
-  if (overlayMode === "air_temperature" || overlayMode === "water_temperature") {
-    const t = Math.max(0, Math.min(1, (parseFloat(v) - 40) / 50));
-    return lerpColor("#3498db", "#e74c3c", t);
-  }
-  if (overlayMode === "air_pressure") {
-    const t = Math.max(0, Math.min(1, (parseFloat(v) - 980) / 50));
-    return lerpColor("#9b59b6", "#2ecc71", t);
-  }
-  if (overlayMode === "wind") {
-    const t = Math.max(0, Math.min(1, parseFloat(v) / 30));
-    return lerpColor("#f1c40f", "#e74c3c", t);
-  }
-  return "#e67e22";
-}
-
-function lerpColor(a, b, t) {
-  const ah = parseInt(a.replace("#", ""), 16);
-  const bh = parseInt(b.replace("#", ""), 16);
-  const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
-  const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
-  const rr = Math.round(ar + (br - ar) * t);
-  const rg = Math.round(ag + (bg - ag) * t);
-  const rb = Math.round(ab + (bb - ab) * t);
-  return `#${((1 << 24) + (rr << 16) + (rg << 8) + rb).toString(16).slice(1)}`;
-}
-
-function renderMarkers() {
-  if (clusterGroup) { map.removeLayer(clusterGroup); clusterGroup = null; }
-  if (markersLayer) { map.removeLayer(markersLayer); markersLayer = null; }
-
-  const stations = getFilteredStations();
-  const group = useClusters
-    ? L.markerClusterGroup({ maxClusterRadius: 42, spiderfyOnMaxZoom: true, showCoverageOnHover: false })
-    : L.layerGroup();
-
-  stations.forEach((s) => {
-    if (!s.lat || !s.lng) return;
-    const col = colorForOverlay(s);
-    const size = (overlayMode !== "none" && latestValues[s.id]) ? 16 : 13;
-
-    const icon = L.divIcon({
-      className: "",
-      html: `<div style="
-        width:${size}px;height:${size}px;border-radius:50%;
-        background:${col};border:2px solid #fff;
-        box-shadow:0 0 6px rgba(0,0,0,0.7);cursor:pointer;
-      " title="${s.name}"></div>`,
-      iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2]
-    });
-
-    const marker = L.marker([s.lat, s.lng], { icon });
-    let tip = `<strong>${s.name}</strong><br/>${s.id} · ${s.state || ""} · ${s.type}`;
-    if (latestValues[s.id]) {
-      const lv = latestValues[s.id];
-      if (lv.water_level != null) tip += `<br/>WL: ${lv.water_level} ft`;
-      if (lv.air_temperature != null) tip += `<br/>Air: ${lv.air_temperature}°F`;
-      if (lv.wind != null) tip += `<br/>Wind: ${lv.wind} kn`;
-    }
-    marker.bindTooltip(tip, { direction: "top", offset: [0, -8] });
-    marker.on("click", () => openStation(s));
-    group.addLayer(marker);
-  });
-
-  group.addTo(map);
-  if (useClusters) clusterGroup = group;
-  else markersLayer = group;
-
-  document.getElementById("stationCount").textContent = stations.length;
-  const _sb = document.getElementById("stationBadge");
-  if (_sb) _sb.textContent = String(stations.length);
-}
-
-function applyFilters() {
-  renderMarkers();
-  const stations = getFilteredStations();
-  if (stations.length && stations.length < 100) {
-    const bounds = L.latLngBounds(stations.map((s) => [s.lat, s.lng]));
-    if (bounds.isValid()) map.fitBounds(bounds.pad(0.12));
-  }
-}
-
-// ========== ACTIVE / REALTIME PANEL ==========
-async function loadActivePanel(isAuto = false) {
-  const list = document.getElementById("activeList");
-  if (!isAuto) list.innerHTML = `<div class="loading">FETCHING LATEST OBSERVATIONS...</div>`;
-
-  // Build ordered list: Mid-Atlantic first, then others
-  const mid = MID_ATLANTIC_PRIORITY
-    .map((id) => allStations.find((s) => s.id === id))
-    .filter(Boolean);
-
-  const rest = HIGHLIGHT_IDS
-    .filter((id) => !MID_ATLANTIC_PRIORITY.includes(id))
-    .map((id) => allStations.find((s) => s.id === id))
-    .filter(Boolean);
-
-  const toFetch = [...mid, ...rest].slice(0, 42);
-  if (!toFetch.length) {
-    list.innerHTML = `<div class="loading">No stations loaded yet</div>`;
-    return;
-  }
-
-  const results = await Promise.allSettled(
-    toFetch.map(async (s) => {
-      const data = await fetchLatest(s.id, "water_level");
-      return { station: s, data };
-    })
-  );
-
-  let anyUpdate = false;
-  const frag = document.createDocumentFragment();
-
-  // Section header for pinned
-  const pinHeader = document.createElement("div");
-  pinHeader.className = "active-section-header";
-  pinHeader.textContent = "▸ MID-ATLANTIC (NJ · PA · DE · MD)";
-  frag.appendChild(pinHeader);
-
-  let midCount = 0;
-  results.forEach((r, idx) => {
-    if (r.status !== "fulfilled" || !r.value.data) return;
-    const { station, data } = r.value;
-    const isMid = MID_ATLANTIC_PRIORITY.includes(station.id);
-
-    // Detect change for chime
-    const key = station.id + "_wl";
-    const newHash = `${data.v}|${data.t}`;
-    if (lastDataHash[key] && lastDataHash[key] !== newHash) anyUpdate = true;
-    lastDataHash[key] = newHash;
-
-    // Cache for overlays
-    if (!latestValues[station.id]) latestValues[station.id] = {};
-    latestValues[station.id].water_level = data.v;
-
-    if (isMid) midCount++;
-    if (idx === mid.length && midCount > 0) {
-      const otherHeader = document.createElement("div");
-      otherHeader.className = "active-section-header";
-      otherHeader.textContent = "▸ OTHER ACTIVE SITES";
-      frag.appendChild(otherHeader);
-    }
-
-    const item = document.createElement("div");
-    item.className = "active-item" + (isMid ? " pinned" : "");
-    item.innerHTML = `
-      <div class="name">${isMid ? "★ " : ""}${station.name}</div>
-      <div class="meta">${station.id} · ${station.state || ""} · ${station.type}</div>
-      <div class="val">${data.v != null ? data.v + " ft" : "—"}
-        <span style="color:var(--text-muted);font-size:10px"> ${data.t || ""}</span>
+    win.innerHTML = `
+      <div class="float-head">
+        <div style="min-width:0">
+          <div class="float-title">${title}</div>
+          ${sub ? `<div class="float-sub">${sub}</div>` : ""}
+        </div>
+        <div class="float-actions">
+          <button type="button" class="icon-btn float-watch" title="Add to watch">★</button>
+          <button type="button" class="icon-btn float-close" title="Close">×</button>
+        </div>
       </div>
+      <div class="float-body">${bodyHtml}</div>
     `;
-    item.onclick = () => openStation(station);
-    frag.appendChild(item);
-  });
+    layer.appendChild(win);
+    floatWindows.set(key, { el: win });
+    bringToFront(win);
 
-  list.innerHTML = "";
-  list.appendChild(frag);
+    // drag
+    const head = win.querySelector(".float-head");
+    let drag = null;
+    head.addEventListener("mousedown", e => {
+      if (e.target.closest("button")) return;
+      bringToFront(win);
+      drag = { x: e.clientX - win.offsetLeft, y: e.clientY - win.offsetTop };
+      win.classList.add("dragging");
+    });
+    window.addEventListener("mousemove", e => {
+      if (!drag) return;
+      win.style.left = Math.max(0, Math.min(window.innerWidth - 80, e.clientX - drag.x)) + "px";
+      win.style.top = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - drag.y)) + "px";
+    });
+    window.addEventListener("mouseup", () => {
+      if (drag) { drag = null; win.classList.remove("dragging"); }
+    });
 
-  if (anyUpdate && isAuto) {
-    playSolChime();
-    showToast("Realtime data updated — SOL chime");
+    win.querySelector(".float-close").onclick = () => closeFloat(key);
+    win.querySelector(".float-watch").onclick = () => {
+      const st = stations.find(s => s.id === key) || buoyStations.find(s => s.id === key);
+      if (st) { addWatch(st); toast(`Watching ${st.name || st.id}`); }
+    };
+
+    // tabs
+    win.querySelectorAll(".float-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        win.querySelectorAll(".float-tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        const pane = tab.dataset.pane;
+        win.querySelectorAll("[data-pane-content]").forEach(p => {
+          p.style.display = p.dataset.paneContent === pane ? "" : "none";
+        });
+      });
+    });
+
+    return win;
   }
 
-  // If overlay is active, recolor markers
-  if (overlayMode !== "none") renderMarkers();
-}
+  // ========== MAP ==========
+  function initMap() {
+    map = L.map("map", {
+      center: [38.5, -77.0],
+      zoom: 6,
+      zoomControl: false,
+      attributionControl: false,
+    });
 
-async function fetchLatest(stationId, product = "water_level") {
-  try {
-    let url = `${DATAAPI}?date=latest&station=${stationId}&product=${product}&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
-    if (product === "water_level") url += "&datum=MLLW";
-    if (product === "currents") url += "&bin=1";
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.data && json.data.length) return json.data[0];
-    return null;
-  } catch {
-    return null;
-  }
-}
+    basemapLayers = {
+      dark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        maxZoom: 19, subdomains: "abcd",
+      }),
+      imagery: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+        maxZoom: 19,
+      }),
+      topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", { maxZoom: 17 }),
+      streets: L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+        maxZoom: 19, subdomains: "abcd",
+      }),
+      ocean: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}", {
+        maxZoom: 13,
+      }),
+    };
+    basemapLayers.dark.addTo(map);
 
-// ========== STATION MODAL ==========
-async function openStation(station) {
-  selectedStation = station;
-  const modal = document.getElementById("stationModal");
-  modal.classList.remove("hidden");
+    markersLayer = L.markerClusterGroup({
+      maxClusterRadius: 48,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      disableClusteringAtZoom: 12,
+    });
+    map.addLayer(markersLayer);
 
-  document.getElementById("modalStationName").textContent = station.name || "UNKNOWN";
-  document.getElementById("modalStationId").textContent = station.id;
-  document.getElementById("officialLink").href =
-    station.type === "currents"
-      ? `https://tidesandcurrents.noaa.gov/cdata/StationInfo?id=${station.id}`
-      : `https://tidesandcurrents.noaa.gov/stationhome.html?id=${station.id}`;
+    buoyLayer = L.layerGroup().addTo(map);
+    nwsAlertLayer = L.layerGroup().addTo(map);
 
-  // Richer meta like official page
-  const meta = document.getElementById("modalMeta");
-  meta.innerHTML = `
-    <div class="meta-item"><div class="mlabel">LATITUDE</div><div class="mval">${station.lat?.toFixed(5) ?? "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">LONGITUDE</div><div class="mval">${station.lng?.toFixed(5) ?? "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">STATE</div><div class="mval">${station.state || "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">TYPE</div><div class="mval">${station.type?.toUpperCase()}</div></div>
-    <div class="meta-item"><div class="mlabel">PORTS®</div><div class="mval">${station.isPorts ? "YES · " + (station.portscode || "") : "NO"}</div></div>
-    <div class="meta-item"><div class="mlabel">AFFILIATIONS</div><div class="mval">${station.affiliations || "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">TIMEZONE</div><div class="mval">${station.timezone || "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">TIDAL</div><div class="mval">${station.tidal ? "YES" : "NO"} · ${station.tideType || ""}</div></div>
-  `;
-
-  // Watch button — adds to bottom watch strip
-  const watchBtn = document.getElementById("watchBtn");
-  if (watchBtn) {
-    const already = watchedList.some(w => w.id === station.id);
-    watchBtn.textContent = already ? "★ ON WATCH" : "☆ WATCH";
-    watchBtn.classList.toggle("active", already);
-    watchBtn.onclick = () => {
-      addToWatch(station.id);
-      watchBtn.textContent = "★ ON WATCH";
-      watchBtn.classList.add("active");
-      showToast(`Added ${station.name} to watch panel`);
+    $("#zoomInBtn").onclick = () => map.zoomIn();
+    $("#zoomOutBtn").onclick = () => map.zoomOut();
+    $("#locateBtn").onclick = () => {
+      map.locate({ setView: true, maxZoom: 11 });
+    };
+    $("#fitBtn").onclick = () => {
+      if (stations.length) {
+        const b = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
+        map.fitBounds(b.pad(0.08));
+      }
     };
   }
 
-  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-  document.querySelector('.tab[data-tab="latest"]').classList.add("active");
-  await loadTab("latest");
-}
-
-function closeModal() {
-  document.getElementById("stationModal").classList.add("hidden");
-  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-  selectedStation = null;
-}
-
-async function loadTab(tab, quiet = false) {
-  const content = document.getElementById("tabContent");
-  if (!quiet) content.innerHTML = `<div class="loading">FETCHING DATA...</div>`;
-  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-
-  const s = selectedStation;
-  if (!s) return;
-
-  try {
-    if (tab === "latest") await renderLatest(s, content);
-    else if (tab === "water") await renderTimeSeries(s, content, "water_level", "Water Level (ft MLLW)");
-    else if (tab === "met") await renderMet(s, content);
-    else if (tab === "currents") await renderCurrents(s, content);
-    else if (tab === "predictions") await renderPredictions(s, content);
-    else if (tab === "datums") await renderDatums(s, content);
-    else if (tab === "flood") await renderFlood(s, content);
-  } catch (err) {
-    console.error(err);
-    content.innerHTML = `<div class="loading">Error: ${err.message}</div>`;
-  }
-}
-
-async function renderLatest(station, container) {
-  const products = station.type === "currents"
-    ? ["currents"]
-    : [
-        "water_level", "predictions", "air_temperature", "water_temperature",
-        "air_pressure", "wind", "visibility", "humidity", "conductivity", "air_gap"
-      ];
-
-  const cards = [];
-  for (const prod of products) {
-    try {
-      let url = `${DATAAPI}?date=latest&station=${station.id}&product=${prod}&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
-      if (prod === "water_level" || prod === "predictions") url += "&datum=MLLW";
-      if (prod === "currents") url += "&bin=1";
-      if (prod === "predictions") url += "&interval=hilo";
-
-      const res = await fetch(url);
-      const json = await res.json();
-
-      if (prod === "predictions" && json.predictions && json.predictions.length) {
-        const next = json.predictions[0];
-        cards.push(`
-          <div class="data-card highlight">
-            <div class="dlabel">NEXT TIDE (${next.type || ""})</div>
-            <div class="dval">${next.v}<span class="dunit">ft</span></div>
-            <div class="dtime">${next.t}</div>
-          </div>
-        `);
-        continue;
-      }
-
-      if (json.data && json.data[0]) {
-        const d = json.data[0];
-        let label = prod.replace(/_/g, " ").toUpperCase();
-        let val = d.v ?? d.s ?? "—";
-        let unit = "";
-        let extra = "";
-
-        if (prod === "water_level") { unit = "ft MLLW"; label = "WATER LEVEL"; }
-        else if (prod === "air_temperature" || prod === "water_temperature") unit = "°F";
-        else if (prod === "air_pressure") unit = "mb";
-        else if (prod === "wind") {
-          val = d.s ?? "—"; unit = "kn";
-          extra = d.d != null ? ` @ ${d.d}°` : "";
-          if (d.g) extra += ` G${d.g}`;
-        }
-        else if (prod === "visibility") unit = "nm";
-        else if (prod === "humidity") unit = "%";
-        else if (prod === "conductivity") unit = "mS/cm";
-        else if (prod === "air_gap") unit = "ft";
-        else if (prod === "currents") {
-          val = d.s ?? "—"; unit = "kn";
-          extra = d.d != null ? ` @ ${d.d}°` : "";
-        }
-
-        // cache
-        if (!latestValues[station.id]) latestValues[station.id] = {};
-        latestValues[station.id][prod] = val;
-
-        cards.push(`
-          <div class="data-card">
-            <div class="dlabel">${label}</div>
-            <div class="dval">${val}<span class="dunit">${unit}${extra}</span></div>
-            <div class="dtime">${d.t || ""}</div>
-          </div>
-        `);
-      }
-    } catch (_) {}
-  }
-
-  // Add residual / observed vs predicted if we have both
-  try {
-    const obs = await fetchLatest(station.id, "water_level");
-    const predUrl = `${DATAAPI}?date=latest&station=${station.id}&product=predictions&datum=MLLW&time_zone=gmt&units=english&interval=h&format=json&application=tides-currents-xplr`;
-    const predRes = await fetch(predUrl);
-    const predJson = await predRes.json();
-    if (obs && predJson.predictions && predJson.predictions.length) {
-      const p = parseFloat(predJson.predictions[0].v);
-      const o = parseFloat(obs.v);
-      if (!isNaN(p) && !isNaN(o)) {
-        const residual = (o - p).toFixed(2);
-        cards.push(`
-          <div class="data-card">
-            <div class="dlabel">RESIDUAL (OBS − PRED)</div>
-            <div class="dval">${residual}<span class="dunit">ft</span></div>
-            <div class="dtime">Observed vs predicted</div>
-          </div>
-        `);
-      }
+  function setBasemap(name) {
+    Object.values(basemapLayers).forEach(l => map.removeLayer(l));
+    if (basemapLayers[name]) {
+      basemapLayers[name].addTo(map);
+      currentBasemap = name;
     }
-  } catch (_) {}
-
-  if (!cards.length) {
-    container.innerHTML = `<div class="loading">No latest observations available</div>`;
-  } else {
-    container.innerHTML = `<div class="data-grid">${cards.join("")}</div>`;
-  }
-  document.getElementById("modalUpdateTime").textContent =
-    `Updated ${new Date().toISOString().substr(11, 8)} UTC`;
-}
-
-async function renderTimeSeries(station, container, product, title) {
-  const end = new Date();
-  const begin = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-  const fmt = (d) =>
-    `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-
-  let url = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(end)}&station=${station.id}&product=${product}&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
-  if (product === "water_level") url += "&datum=MLLW";
-
-  const res = await fetch(url);
-  const json = await res.json();
-  if (!json.data || !json.data.length) {
-    container.innerHTML = `<div class="loading">No time series data available</div>`;
-    return;
+    $$("#basemapChips .chip").forEach(c => c.classList.toggle("active", c.dataset.bm === name));
+    saveLayoutLocal();
   }
 
-  const labels = json.data.map((d) => d.t);
-  const values = json.data.map((d) => parseFloat(d.v));
-
-  container.innerHTML = `
-    <div style="color:var(--text-dim);font-size:11px;margin-bottom:6px">${title} — last 24h</div>
-    <div class="chart-wrap"><canvas id="tsChart"></canvas></div>
-  `;
-
-  const ctx = document.getElementById("tsChart").getContext("2d");
-  chartInstance = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [{
-        label: (station?.name ? station.name + " — " : "") + title,
-        data: values,
-        borderColor: "#e67e22",
-        backgroundColor: "rgba(230,126,34,0.12)",
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.2,
-        fill: true
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: "#5a6a7a", maxTicksLimit: 8, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-        y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" } }
-      }
-    }
-  });
-}
-
-async function renderMet(station, container) {
-  const products = [
-    { key: "air_temperature", label: "AIR TEMP (°F)" },
-    { key: "water_temperature", label: "WATER TEMP (°F)" },
-    { key: "air_pressure", label: "PRESSURE (mb)" },
-    { key: "wind", label: "WIND" },
-    { key: "visibility", label: "VISIBILITY (nm)" },
-    { key: "humidity", label: "HUMIDITY (%)" },
-    { key: "conductivity", label: "CONDUCTIVITY" }
-  ];
-
-  const cards = [];
-  for (const p of products) {
-    try {
-      const url = `${DATAAPI}?date=latest&station=${station.id}&product=${p.key}&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (json.data && json.data[0]) {
-        const d = json.data[0];
-        let val = d.v ?? d.s ?? "—";
-        let extra = "";
-        if (p.key === "wind") {
-          extra = d.d != null ? ` ${d.d}°` : "";
-          if (d.g) extra += ` G${d.g}`;
-        }
-        cards.push(`
-          <div class="data-card">
-            <div class="dlabel">${p.label}</div>
-            <div class="dval">${val}<span class="dunit">${extra}</span></div>
-            <div class="dtime">${d.t || ""}</div>
-          </div>
-        `);
-      }
-    } catch (_) {}
+  function markerIcon(type, fresh) {
+    const cls = `tcx-marker ${type || "wl"}${fresh ? " fresh" : ""}`;
+    return L.divIcon({
+      className: "",
+      html: `<div class="${cls}"></div>`,
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    });
   }
 
-  container.innerHTML = cards.length
-    ? `<div class="data-grid">${cards.join("")}</div>`
-    : `<div class="loading">No meteorological sensors / data at this station</div>`;
-}
+  function stationType(s) {
+    if (s.type === "buoy") return "buoy";
+    if (s.ports || (s.products || []).some(p => /current/i.test(p))) return "curr";
+    if ((s.products || []).some(p => /air_temperature|wind|humidity|visibility|air_pressure/i.test(p)) &&
+        !(s.products || []).some(p => /water_level|predictions/i.test(p))) return "met";
+    return "wl";
+  }
 
-async function renderCurrents(station, container) {
-  // Observed currents (PORTS meters) OR predicted currents if available
-  const isCurrentMeter = station.type === "currents";
-  container.innerHTML = `<div class="loading">LOADING CURRENTS OVER TIME...</div>`;
+  function renderMarkers() {
+    markersLayer.clearLayers();
+    const filtered = getFilteredStations();
+    filtered.forEach(s => {
+      if (!s.lat || !s.lng) return;
+      const type = stationType(s);
+      const m = L.marker([s.lat, s.lng], { icon: markerIcon(type, s._fresh) });
+      m.bindTooltip(`<strong>${s.name || s.id}</strong><br/><span class="mono">${s.id}</span>`, {
+        direction: "top", offset: [0, -8],
+      });
+      m.on("click", () => openStationWindow(s));
+      markersLayer.addLayer(m);
+      s._marker = m;
+    });
+    $("#stationCount").textContent = filtered.length.toLocaleString();
+    $("#stationBadge").textContent = filtered.length;
+  }
 
-  try {
-    const end = new Date();
-    const begin = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-    const fmt = (d) =>
-      `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-
-    let series = null;
-    let latest = null;
-
-    if (isCurrentMeter) {
-      // Observed currents last 24h
-      let url = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(end)}&station=${station.id}&product=currents&bin=1&time_zone=gmt&units=english&format=json&application=tides-currents-xplr`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (json.data && json.data.length) {
-        series = json.data.map(d => ({ t: d.t, s: parseFloat(d.s), d: parseFloat(d.d) })).filter(x => !isNaN(x.s));
-        latest = json.data[json.data.length - 1];
-      }
-    }
-
-    // Also try currents_predictions for stations that support it
-    if (!series || series.length < 2) {
-      try {
-        const url2 = `${DATAAPI}?begin_date=${fmt(begin)}&range=24&station=${station.id}&product=currents_predictions&time_zone=gmt&units=english&interval=h&format=json&application=tides-currents-xplr`;
-        const res2 = await fetch(url2);
-        const json2 = await res2.json();
-        const rows = json2.current_predictions || json2.predictions || json2.data;
-        if (rows && rows.length) {
-          series = rows.map(d => ({
-            t: d.t || d.Time,
-            s: parseFloat(d.s ?? d.Speed ?? d.Velocity_Major),
-            d: parseFloat(d.d ?? d.Direction)
-          })).filter(x => !isNaN(x.s));
-          if (!latest && series.length) latest = { s: series[series.length-1].s, d: series[series.length-1].d, t: series[series.length-1].t };
-        }
-      } catch (_) {}
-    }
-
-    if (!series || !series.length) {
-      container.innerHTML = `<div class="loading">No current observations or predictions available for this station.<br/>Try a PORTS current meter (teal markers) or a station with current predictions.</div>`;
+  function renderBuoys() {
+    buoyLayer.clearLayers();
+    if (!$("#showBuoys").checked) {
+      $("#buoyCount").textContent = "0";
       return;
     }
+    buoyStations.forEach(b => {
+      if (!b.lat || !b.lng) return;
+      const m = L.marker([b.lat, b.lng], { icon: markerIcon("buoy", b._fresh) });
+      m.bindTooltip(`<strong>${b.name || b.id}</strong><br/>NDBC buoy`, { direction: "top", offset: [0, -8] });
+      m.on("click", () => openBuoyWindow(b));
+      buoyLayer.addLayer(m);
+    });
+    $("#buoyCount").textContent = buoyStations.length.toLocaleString();
+  }
 
-    let cards = "";
-    if (latest) {
-      cards = `
-        <div class="data-grid" style="margin-bottom:12px">
-          <div class="data-card highlight"><div class="dlabel">SPEED</div><div class="dval">${latest.s ?? series[series.length-1].s}<span class="dunit">kn</span></div><div class="dtime">${latest.t || ""}</div></div>
-          <div class="data-card"><div class="dlabel">DIRECTION</div><div class="dval">${latest.d ?? series[series.length-1].d ?? "—"}<span class="dunit">°</span></div></div>
-          <div class="data-card"><div class="dlabel">POINTS</div><div class="dval">${series.length}</div><div class="dtime">last ~24h</div></div>
-        </div>`;
+  // ========== DATA LOADING ==========
+  async function loadStations() {
+    try {
+      const [wl, cu] = await Promise.all([
+        fetch(`${MDAPI}/stations.json?type=waterlevels&status=active`).then(r => r.json()),
+        fetch(`${MDAPI}/stations.json?type=currents&status=active`).then(r => r.json()),
+      ]);
+      const mapById = new Map();
+      const ingest = (list, typeHint) => {
+        (list?.stations || list || []).forEach(s => {
+          const id = String(s.id || s.stationId || "");
+          if (!id) return;
+          const existing = mapById.get(id) || {
+            id,
+            name: s.name || id,
+            lat: +s.lat,
+            lng: +(s.lng || s.lon),
+            state: s.state || "",
+            products: [],
+            ports: !!s.ports,
+            type: typeHint,
+          };
+          existing.name = s.name || existing.name;
+          existing.lat = +s.lat || existing.lat;
+          existing.lng = +(s.lng || s.lon) || existing.lng;
+          existing.state = s.state || existing.state;
+          if (s.products) {
+            const prods = Array.isArray(s.products) ? s.products : (s.products.products || []);
+            prods.forEach(p => {
+              const name = typeof p === "string" ? p : (p.name || p.product || "");
+              if (name && !existing.products.includes(name)) existing.products.push(name);
+            });
+          }
+          if (typeHint === "currents") existing.ports = true;
+          mapById.set(id, existing);
+        });
+      };
+      ingest(wl, "waterlevels");
+      ingest(cu, "currents");
+      stations = [...mapById.values()].filter(s => s.lat && s.lng);
+      populateStateFilter();
+      renderMarkers();
+      renderStationList();
+      toast(`${stations.length} stations loaded`);
+    } catch (e) {
+      console.error(e);
+      toast("Failed to load stations");
+      $("#stationList").innerHTML = `<div class="empty-state">Could not load stations. Check network.</div>`;
     }
+  }
 
-    container.innerHTML = `
-      ${cards}
-      <div style="color:var(--text-dim);font-size:11px;margin-bottom:6px">CURRENT SPEED OVER TIME</div>
-      <div class="chart-wrap"><canvas id="currChart"></canvas></div>
+  async function loadBuoys() {
+    // NDBC latest_obs — try direct then CORS proxies
+    const urls = [
+      "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt",
+      "https://corsproxy.io/?https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt",
+    ];
+    let text = null;
+    for (const u of urls) {
+      try {
+        const r = await fetch(u);
+        if (r.ok) { text = await r.text(); break; }
+      } catch (_) {}
+    }
+    if (!text) {
+      $("#buoyCount").textContent = "—";
+      return;
+    }
+    const lines = text.trim().split("\n").slice(2);
+    const list = [];
+    for (const line of lines) {
+      const p = line.trim().split(/\s+/);
+      if (p.length < 6) continue;
+      const id = p[0];
+      const lat = parseFloat(p[1]);
+      const lon = parseFloat(p[2]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      // rough US / coastal filter
+      if (lat < 15 || lat > 72 || lon < -180 || lon > -50) continue;
+      list.push({
+        id, lat, lng: lon, type: "buoy", name: `NDBC ${id}`,
+        wind: p[6] !== "MM" ? p[6] : null,
+        gst: p[7] !== "MM" ? p[7] : null,
+        wvht: p[8] !== "MM" ? p[8] : null,
+        dpd: p[9] !== "MM" ? p[9] : null,
+        atmp: p[13] !== "MM" ? p[13] : null,
+        wtmp: p[14] !== "MM" ? p[14] : null,
+        _raw: p,
+        _fresh: true,
+      });
+    }
+    buoyStations = list;
+    renderBuoys();
+  }
+
+  async function loadNwsAlerts() {
+    try {
+      const r = await fetch("https://api.weather.gov/alerts/active?event=Coastal%20Flood%20Warning,Coastal%20Flood%20Watch,Coastal%20Flood%20Advisory,Flood%20Warning,Flood%20Watch");
+      const j = await r.json();
+      nwsAlerts = (j.features || []).map(f => ({
+        id: f.id,
+        event: f.properties?.event || "Alert",
+        headline: f.properties?.headline || "",
+        severity: f.properties?.severity || "",
+        area: f.properties?.areaDesc || "",
+        onset: f.properties?.onset,
+        ends: f.properties?.ends,
+        desc: f.properties?.description || "",
+        url: f.properties?.@id || f.id,
+        geometry: f.geometry,
+      }));
+      renderAlerts();
+      if ($("#showWarnings").checked) drawAlertZones();
+    } catch (e) {
+      $("#warningsCount").textContent = "Alerts unavailable";
+    }
+  }
+
+  function drawAlertZones() {
+    nwsAlertLayer.clearLayers();
+    if (!$("#showWarnings").checked) return;
+    nwsAlerts.forEach(a => {
+      if (!a.geometry) return;
+      try {
+        const layer = L.geoJSON(a.geometry, {
+          style: { color: "#f87171", weight: 1, fillOpacity: 0.12, fillColor: "#f87171" },
+        });
+        layer.bindTooltip(a.event + (a.area ? ` — ${a.area}` : ""));
+        layer.on("click", () => openAlertWindow(a));
+        nwsAlertLayer.addLayer(layer);
+      } catch (_) {}
+    });
+  }
+
+  // ========== FILTERS & LISTS ==========
+  function populateStateFilter() {
+    const sel = $("#stateFilter");
+    const states = [...new Set(stations.map(s => s.state).filter(Boolean))].sort();
+    sel.innerHTML = `<option value="">All states</option>` +
+      states.map(st => `<option value="${st}">${STATE_NAMES[st] || st}</option>`).join("");
+    const qs = $("#quickStates");
+    qs.innerHTML = ["FL","CA","NY","TX","WA","LA","VA","ME"].filter(s => states.includes(s))
+      .map(s => `<button type="button" class="qs-btn" data-st="${s}">${s}</button>`).join("");
+    qs.querySelectorAll(".qs-btn").forEach(btn => {
+      btn.onclick = () => {
+        $("#stateFilter").value = btn.dataset.st;
+        applyFilters();
+        qs.querySelectorAll(".qs-btn").forEach(b => b.classList.toggle("active", b === btn));
+      };
+    });
+  }
+
+  function getFilteredStations() {
+    const st = $("#stateFilter").value;
+    const ty = $("#typeFilter").value;
+    const showWl = $("#showWaterLevels").checked;
+    const showCu = $("#showCurrents").checked;
+    const portsOnly = $("#showPorts").checked;
+    const q = ($("#searchInput").value || "").trim().toLowerCase();
+
+    return stations.filter(s => {
+      if (st && s.state !== st) return false;
+      if (portsOnly && !s.ports) return false;
+      if (ty === "waterlevels" && stationType(s) !== "wl") return false;
+      if (ty === "currents" && stationType(s) !== "curr") return false;
+      if (ty === "met" && stationType(s) !== "met") return false;
+      if (ty === "ports" && !s.ports) return false;
+      if (!showWl && stationType(s) === "wl") return false;
+      if (!showCu && stationType(s) === "curr") return false;
+      if (q) {
+        const hay = `${s.name} ${s.id} ${s.state}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  function applyFilters() {
+    renderMarkers();
+    renderStationList();
+    renderBuoys();
+    saveLayoutLocal();
+  }
+
+  function renderStationList() {
+    const list = getFilteredStations().slice(0, 200);
+    const el = $("#stationList");
+    if (!list.length) {
+      el.innerHTML = `<div class="empty-state">No stations match filters</div>`;
+      return;
+    }
+    el.innerHTML = list.map(s => `
+      <div class="station-item" data-id="${s.id}">
+        <div class="name">${s.name || s.id}</div>
+        <div class="meta">${s.id} · ${s.state || "—"} · ${stationType(s)}</div>
+      </div>
+    `).join("");
+    el.querySelectorAll(".station-item").forEach(item => {
+      item.onclick = () => {
+        const s = stations.find(x => x.id === item.dataset.id);
+        if (s) {
+          openStationWindow(s);
+          map.setView([s.lat, s.lng], Math.max(map.getZoom(), 10));
+        }
+      };
+    });
+  }
+
+  function renderAlerts() {
+    $("#warningsCount").textContent = `${nwsAlerts.length} active coastal / flood alerts`;
+    const el = $("#warningsList");
+    if (!nwsAlerts.length) {
+      el.innerHTML = `<div class="muted">No active coastal flood alerts</div>`;
+      return;
+    }
+    el.innerHTML = nwsAlerts.slice(0, 40).map(a => {
+      const sev = (a.severity || "").toLowerCase();
+      const cls = sev.includes("extreme") || sev.includes("severe") ? "sev-warning" :
+        sev.includes("moderate") ? "sev-watch" : "sev-advisory";
+      return `<div class="alert-item ${cls}" data-id="${a.id}">
+        <div class="al-title">${a.event}</div>
+        <div class="al-meta">${a.area || ""} · ${a.severity || ""}</div>
+      </div>`;
+    }).join("");
+    el.querySelectorAll(".alert-item").forEach(item => {
+      item.onclick = () => {
+        const a = nwsAlerts.find(x => x.id === item.dataset.id);
+        if (a) openAlertWindow(a);
+      };
+    });
+  }
+
+  // ========== WATCH STRIP ==========
+  function addWatch(station, silent) {
+    if (watched.some(w => w.id === station.id)) return;
+    watched.push({ id: station.id, station, data: null, lastFetch: 0 });
+    if (!silent) renderWatches();
+    refreshWatch(watched[watched.length - 1]);
+    saveLayoutLocal();
+  }
+
+  function removeWatch(id) {
+    watched = watched.filter(w => w.id !== id);
+    renderWatches();
+    saveLayoutLocal();
+  }
+
+  async function refreshWatch(w) {
+    try {
+      const url = `${DATAAPI}?date=latest&station=${w.id}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
+      const r = await fetch(url);
+      const j = await r.json();
+      const d = j?.data?.[0];
+      if (d) {
+        w.data = d;
+        w.lastFetch = Date.now();
+        w.station._fresh = true;
+      }
+    } catch (_) {}
+    renderWatches();
+  }
+
+  async function refreshAllWatches() {
+    await Promise.all(watched.map(w => refreshWatch(w)));
+  }
+
+  function renderWatches() {
+    const el = $("#watchList");
+    if (!watched.length) {
+      el.innerHTML = `<div class="empty-state muted">Click a station → Add to watch</div>`;
+      return;
+    }
+    el.innerHTML = watched.map(w => {
+      const v = w.data?.v != null ? `${fmtNum(w.data.v, 2)} ft` : "—";
+      const t = w.data?.t || "";
+      return `<div class="watch-card" data-id="${w.id}">
+        <div class="wc-head">
+          <span class="wc-name">${w.station.name || w.id}</span>
+          <span class="wc-id">${w.id}</span>
+        </div>
+        <div class="wc-val">${v}</div>
+        <div class="wc-src">${t ? t + " UTC · " : ""}CO-OPS · click for details</div>
+      </div>`;
+    }).join("");
+    el.querySelectorAll(".watch-card").forEach(card => {
+      card.onclick = () => {
+        const w = watched.find(x => x.id === card.dataset.id);
+        if (w) openStationWindow(w.station);
+      };
+    });
+  }
+
+  // ========== FLOATING STATION / BUOY / ALERT WINDOWS ==========
+  async function openStationWindow(s) {
+    const key = s.id;
+    const products = (s.products || []).join(", ") || "—";
+    const body = `
+      <div class="float-tabs">
+        <button type="button" class="float-tab active" data-pane="overview">Overview</button>
+        <button type="button" class="float-tab" data-pane="levels">Water level</button>
+        <button type="button" class="float-tab" data-pane="pred">Predictions</button>
+        <button type="button" class="float-tab" data-pane="meta">Metadata</button>
+      </div>
+      <div data-pane-content="overview">
+        <div class="meta-grid">
+          <div class="meta-card"><div class="ml">Station ID</div><div class="mv mono">${s.id}</div></div>
+          <div class="meta-card"><div class="ml">State</div><div class="mv">${s.state || "—"}</div></div>
+          <div class="meta-card"><div class="ml">Latitude</div><div class="mv mono">${fmtNum(s.lat, 5)}</div></div>
+          <div class="meta-card"><div class="ml">Longitude</div><div class="mv mono">${fmtNum(s.lng, 5)}</div></div>
+          <div class="meta-card"><div class="ml">Type</div><div class="mv">${stationType(s)}</div></div>
+          <div class="meta-card"><div class="ml">PORTS®</div><div class="mv">${s.ports ? "Yes" : "No"}</div></div>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="action-btn primary" data-act="watch">★ Add to watch</button>
+          <button type="button" class="action-btn" data-act="center">Center map</button>
+          <a class="action-btn" href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${s.id}" target="_blank" rel="noopener">NOAA station ↗</a>
+        </div>
+        <div id="liveVals_${s.id}" class="meta-grid"><div class="meta-card skeleton" style="height:48px;grid-column:1/-1"></div></div>
+      </div>
+      <div data-pane-content="levels" style="display:none">
+        <div class="chart-box"><canvas id="chart_wl_${s.id}"></canvas></div>
+        <div class="muted">Last 48 h water level (MLLW, English units)</div>
+      </div>
+      <div data-pane-content="pred" style="display:none">
+        <div class="chart-box"><canvas id="chart_pred_${s.id}"></canvas></div>
+        <div class="muted">Tide predictions (next 48 h)</div>
+      </div>
+      <div data-pane-content="meta" style="display:none">
+        <div class="meta-card" style="margin-bottom:10px">
+          <div class="ml">Available products</div>
+          <div class="mv" style="font-size:12px;font-weight:400;margin-top:6px">${products}</div>
+        </div>
+        <div class="source-bar">
+          Metadata source: <a href="${MDAPI}/stations/${s.id}.json" target="_blank" rel="noopener">CO-OPS MDAPI</a><br/>
+          Observations: <a href="${DATAAPI}?date=latest&station=${s.id}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json" target="_blank" rel="noopener">Data API</a>
+        </div>
+      </div>
+      <div class="source-bar">
+        Source: NOAA CO-OPS · <a href="https://tidesandcurrents.noaa.gov/" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a>
+      </div>
     `;
+    const win = openFloat(key, s.name || s.id, `Station ${s.id} · ${s.state || ""}`, body);
+    win.querySelector('[data-act="watch"]').onclick = () => { addWatch(s); toast("Added to watch"); };
+    win.querySelector('[data-act="center"]').onclick = () => map.setView([s.lat, s.lng], 12);
 
-    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-    const ctx = document.getElementById("currChart").getContext("2d");
-    chartInstance = new Chart(ctx, {
+    // live values
+    loadStationLive(s, win);
+    loadStationChart(s, "water_level", `chart_wl_${s.id}`, key + "_wl");
+    loadStationChart(s, "predictions", `chart_pred_${s.id}`, key + "_pred");
+  }
+
+  async function loadStationLive(s, win) {
+    const box = win.querySelector(`#liveVals_${s.id}`);
+    if (!box) return;
+    try {
+      const products = ["water_level", "air_temperature", "water_temperature", "wind", "air_pressure"];
+      const results = await Promise.all(products.map(async p => {
+        try {
+          const r = await fetch(`${DATAAPI}?date=latest&station=${s.id}&product=${p}&datum=MLLW&units=english&time_zone=gmt&format=json`);
+          const j = await r.json();
+          return { product: p, data: j?.data?.[0] || null };
+        } catch { return { product: p, data: null }; }
+      }));
+      const cards = results.filter(r => r.data).map(r => {
+        let label = r.product.replace(/_/g, " ");
+        let val = r.data.v ?? r.data.s ?? "—";
+        let unit = "";
+        if (r.product === "water_level") unit = " ft MLLW";
+        if (r.product.includes("temp")) unit = " °F";
+        if (r.product === "wind") { val = r.data.s; unit = " kn"; }
+        if (r.product === "air_pressure") unit = " mb";
+        return `<div class="meta-card"><div class="ml">${label}</div><div class="mv accent">${val}${unit}</div></div>`;
+      });
+      box.innerHTML = cards.length ? cards.join("") : `<div class="muted">No recent observations</div>`;
+    } catch {
+      box.innerHTML = `<div class="muted">Live data unavailable</div>`;
+    }
+  }
+
+  async function loadStationChart(s, product, canvasId, chartKey) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    try {
+      const range = product === "predictions" ? "recent" : "recent";
+      const hours = 48;
+      const end = new Date();
+      const begin = new Date(end.getTime() - hours * 3600 * 1000);
+      const fmt = d => d.toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 12);
+      let url;
+      if (product === "predictions") {
+        url = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(new Date(end.getTime() + hours * 3600 * 1000))}&station=${s.id}&product=predictions&datum=MLLW&units=english&time_zone=gmt&interval=hilo&format=json`;
+        // fallback hourly
+        const r = await fetch(url);
+        let j = await r.json();
+        if (!j?.predictions?.length) {
+          url = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(new Date(end.getTime() + hours * 3600 * 1000))}&station=${s.id}&product=predictions&datum=MLLW&units=english&time_zone=gmt&interval=h&format=json`;
+          j = await (await fetch(url)).json();
+        }
+        const pts = (j.predictions || []).map(p => ({ t: p.t, v: +p.v }));
+        drawChart(canvas, chartKey, pts, "Predicted level (ft)");
+      } else {
+        url = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(end)}&station=${s.id}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
+        const j = await (await fetch(url)).json();
+        const pts = (j.data || []).map(p => ({ t: p.t, v: +p.v }));
+        drawChart(canvas, chartKey, pts, "Water level (ft MLLW)");
+      }
+    } catch (e) {
+      console.warn("chart", e);
+    }
+  }
+
+  function drawChart(canvas, key, points, label) {
+    if (chartInstances.has(key)) {
+      chartInstances.get(key).destroy();
+      chartInstances.delete(key);
+    }
+    if (!points.length) return;
+    const labels = points.map(p => p.t?.slice(11, 16) || "");
+    const data = points.map(p => p.v);
+    const chart = new Chart(canvas, {
       type: "line",
       data: {
-        labels: series.map(x => x.t),
+        labels,
         datasets: [{
-          label: (station?.name ? station.name + " — " : "") + "Speed (kn)",
-          data: series.map(x => x.s),
-          borderColor: "#00b894",
-          backgroundColor: "rgba(0,184,148,0.12)",
-          borderWidth: 1.5,
+          label,
+          data,
+          borderColor: "#22d3ee",
+          backgroundColor: "rgba(34,211,238,0.12)",
+          fill: true,
+          tension: 0.3,
           pointRadius: 0,
-          tension: 0.25,
-          fill: true
-        }]
+          borderWidth: 1.5,
+        }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { ticks: { color: "#5a6a7a", maxTicksLimit: 8, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-          y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" }, title: { display: true, text: "kn", color: "#5a6a7a" } }
-        }
-      }
-    });
-  } catch (err) {
-    container.innerHTML = `<div class="loading">Error: ${err.message}</div>`;
-  }
-}
-
-async function renderPredictions(station, container) {
-  if (station.type === "currents") {
-    container.innerHTML = `<div class="loading">Tide predictions apply to water level stations.</div>`;
-    return;
-  }
-  const today = new Date();
-  const fmt = (d) =>
-    `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-
-  const url = `${DATAAPI}?begin_date=${fmt(today)}&range=72&station=${station.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
-  const res = await fetch(url);
-  const json = await res.json();
-
-  if (!json.predictions || !json.predictions.length) {
-    container.innerHTML = `<div class="loading">No tide predictions available</div>`;
-    return;
-  }
-
-  const rows = json.predictions.slice(0, 16).map((p) => `
-    <div class="data-card">
-      <div class="dlabel">${p.type || "TIDE"}</div>
-      <div class="dval">${p.v}<span class="dunit">ft</span></div>
-      <div class="dtime">${p.t}</div>
-    </div>
-  `).join("");
-
-  container.innerHTML = `
-    <div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">HIGH / LOW PREDICTIONS (next ~72h)</div>
-    <div class="data-grid">${rows}</div>
-  `;
-}
-
-async function renderDatums(station, container) {
-  try {
-    const res = await fetch(`${MDAPI}/stations/${station.id}/datums.json?units=english`);
-    const json = await res.json();
-    if (!json.datums || !json.datums.length) {
-      container.innerHTML = `<div class="loading">No datum information available</div>`;
-      return;
-    }
-    const cards = json.datums.map((d) => `
-      <div class="data-card">
-        <div class="dlabel">${d.name || d.abbr}</div>
-        <div class="dval">${d.value}<span class="dunit">ft</span></div>
-        <div class="dtime">${d.description || ""}</div>
-      </div>
-    `).join("");
-    container.innerHTML = `<div class="data-grid">${cards}</div>`;
-  } catch {
-    container.innerHTML = `<div class="loading">Could not load datums</div>`;
-  }
-}
-
-// ========== WATCH MODE ==========
-function toggleWatch() {
-  if (!selectedStation) return;
-  if (watchedStation?.id === selectedStation.id) {
-    watchedStation = null;
-    document.getElementById("watchPanel")?.classList.add("hidden");
-    document.getElementById("watchBtn").textContent = "☆ WATCH";
-    document.getElementById("watchBtn").classList.remove("active");
-    showToast("Stopped watching station");
-  } else {
-    watchedStation = selectedStation;
-    document.getElementById("watchBtn").textContent = "★ WATCHING";
-    document.getElementById("watchBtn").classList.add("active");
-    document.getElementById("watchPanel")?.classList.remove("hidden");
-    const wsn = document.getElementById("watchStationName"); if (wsn) wsn.textContent = watchedStation.name;
-    refreshWatch();
-    showToast(`Now watching ${watchedStation.name} — updates every 2 min`);
-  }
-}
-
-async function refreshWatch() {
-  if (!watchedStation) return;
-  const box = document.getElementById("watchContent");
-  const data = await fetchLatest(watchedStation.id, "water_level");
-  const air = await fetchLatest(watchedStation.id, "air_temperature");
-  const wind = await fetchLatest(watchedStation.id, "wind");
-
-  let html = "";
-  if (data) {
-    html += `<div class="watch-val">WL <strong>${data.v} ft</strong> <span>${data.t}</span></div>`;
-    // detect change
-    const key = watchedStation.id + "_watch";
-    const h = `${data.v}|${data.t}`;
-    if (lastDataHash[key] && lastDataHash[key] !== h) playSolChime();
-    lastDataHash[key] = h;
-  }
-  if (air) html += `<div class="watch-val">Air <strong>${air.v}°F</strong></div>`;
-  if (wind) html += `<div class="watch-val">Wind <strong>${wind.s} kn</strong> ${wind.d || ""}°</div>`;
-  box.innerHTML = html || "No data";
-  document.getElementById("watchUpdated").textContent = new Date().toISOString().substr(11, 8) + " UTC";
-}
-
-// ========== OVERLAYS ==========
-async function applyOverlay(mode) {
-  overlayMode = mode;
-  document.getElementById("productFilter").value = mode;
-
-  if (mode === "none") {
-    renderMarkers();
-    return;
-  }
-
-  showToast(`Loading ${mode === "all" ? "all" : mode} overlay data...`);
-  const stations = getFilteredStations().slice(0, 80); // limit concurrent
-
-  await Promise.allSettled(stations.map(async (s) => {
-    if (!latestValues[s.id]) latestValues[s.id] = {};
-    if (mode === "all" || mode === "water_level") {
-      const d = await fetchLatest(s.id, "water_level");
-      if (d) latestValues[s.id].water_level = d.v;
-    }
-    if (mode === "all" || mode === "air_temperature") {
-      const d = await fetchLatest(s.id, "air_temperature");
-      if (d) latestValues[s.id].air_temperature = d.v;
-    }
-    if (mode === "all" || mode === "wind") {
-      const d = await fetchLatest(s.id, "wind");
-      if (d) latestValues[s.id].wind = d.s;
-    }
-    if (mode === "currents" && s.type === "currents") {
-      const d = await fetchLatest(s.id, "currents");
-      if (d) latestValues[s.id].currents = d.s;
-    }
-    if (mode === "predictions" || mode === "all") {
-      // ensure tide pred layer visible when overlay is predictions
-      showTidePred = true;
-      const tpBtn = document.getElementById("toggleTidePred");
-      if (tpBtn) tpBtn.classList.add("active");
-      renderTidePredMarkers();
-    }
-  }));
-
-  renderMarkers();
-  showToast("Overlay applied — marker colors updated");
-}
-
-// ========== UI BINDINGS ==========
-function bindUI() {
-  document.getElementById("closeModal").onclick = closeModal;
-  document.getElementById("stationModal").addEventListener("click", (e) => {
-    if (e.target.id === "stationModal") closeModal();
-  });
-
-  document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-      tab.classList.add("active");
-      loadTab(tab.dataset.tab);
-    });
-  });
-
-  document.getElementById("stateFilter").onchange = applyFilters;
-  document.getElementById("typeFilter").onchange = applyFilters;
-  document.getElementById("showWaterLevels").onchange = applyFilters;
-  document.getElementById("showCurrents").onchange = applyFilters;
-  document.getElementById("showPorts").onchange = applyFilters;
-
-  document.getElementById("productFilter").onchange = (e) => {
-    applyOverlay(e.target.value);
-  };
-
-  document.getElementById("resetFilters").onclick = () => {
-    document.getElementById("stateFilter").value = "";
-    document.getElementById("typeFilter").value = "";
-    document.getElementById("productFilter").value = "none";
-    overlayMode = "none";
-    document.getElementById("showWaterLevels").checked = true;
-    document.getElementById("showCurrents").checked = true;
-    document.getElementById("showPorts").checked = false;
-    applyFilters();
-    map.setView([39.0, -75.5], 6);
-  };
-
-  document.getElementById("searchBtn").onclick = doSearch;
-  document.getElementById("searchInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doSearch();
-  });
-
-  document.getElementById("fitUSA")?.addEventListener("click", () => map.setView([39.5, -98.35], 4));
-  document.getElementById("resetViewBtn")?.addEventListener("click", resetView);
-  document.getElementById("softRefreshBtn")?.addEventListener("click", softRefresh);
-  document.getElementById("logoRefreshBtn")?.addEventListener("click", () => {
-    if (typeof softRefresh === "function") softRefresh();
-    else {
-      loadActivePanel?.(true);
-      refreshAllWatches?.();
-      showToast?.("Soft refresh");
-    }
-  });
-  document.getElementById("toggleClusters")?.addEventListener("click", () => {
-    useClusters = !useClusters;
-    renderMarkers();
-    showToast(useClusters ? "Clustering ON" : "Clustering OFF");
-  });
-
-  document.getElementById("refreshActive").onclick = () => loadActivePanel(false);
-
-  document.querySelectorAll(".bm-btn").forEach((btn) => {
-    btn.addEventListener("click", () => setBasemap(btn.dataset.bm));
-  });
-
-  // Watch button (injected in modal footer area via HTML update)
-  const watchBtn = document.getElementById("watchBtn");
-  /* watchBtn bound in openStation to addToWatch */
-
-  document.getElementById("clearWatch")?.addEventListener("click", () => {
-    watchedStation = null;
-    document.getElementById("watchPanel")?.classList.add("hidden");
-  });
-
-  document.getElementById("popoutStationBtn")?.addEventListener("click", () => {
-    if (typeof selectedStation !== "undefined" && selectedStation && typeof popoutStation === "function") {
-      popoutStation(selectedStation);
-    } else {
-      showToast("Open a station first");
-    }
-  });
-}
-
-function doSearch() {
-  const q = document.getElementById("searchInput").value.trim().toLowerCase();
-  if (!q) return;
-
-  const matches = allStations.filter(
-    (s) =>
-      (s.name && s.name.toLowerCase().includes(q)) ||
-      (s.id && s.id.toLowerCase().includes(q)) ||
-      (s.state && s.state.toLowerCase() === q)
-  );
-
-  if (!matches.length) {
-    showToast("No stations match that query");
-    return;
-  }
-
-  if (matches.length === 1) {
-    openStation(matches[0]);
-    map.setView([matches[0].lat, matches[0].lng], 10);
-  } else {
-    if (clusterGroup) map.removeLayer(clusterGroup);
-    if (markersLayer) map.removeLayer(markersLayer);
-
-    const group = L.featureGroup();
-    matches.forEach((s) => {
-      const col = colorForOverlay(s);
-      const icon = L.divIcon({
-        className: "",
-        html: `<div style="width:14px;height:14px;border-radius:50%;background:${col};border:2px solid #fff;"></div>`,
-        iconSize: [14, 14],
-        iconAnchor: [7, 7]
-      });
-      const m = L.marker([s.lat, s.lng], { icon });
-      m.bindTooltip(`${s.name} (${s.id})`);
-      m.on("click", () => openStation(s));
-      group.addLayer(m);
-    });
-    group.addTo(map);
-    markersLayer = group;
-    map.fitBounds(group.getBounds().pad(0.2));
-    document.getElementById("stationCount").textContent = matches.length;
-    showToast(`${matches.length} stations found`);
-  }
-}
-
-function showToast(msg) {
-  const t = document.getElementById("toast");
-  t.textContent = msg;
-  t.classList.remove("hidden");
-  setTimeout(() => t.classList.add("hidden"), 2800);
-}
-
-
-// ========== NDBC BUOYS ==========
-async function loadBuoys() {
-  try {
-    // NDBC does not send CORS headers; use public CORS proxies as fallback chain
-    const sources = [
-      "https://corsproxy.io/?" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"),
-      "https://api.allorigins.win/raw?url=" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"),
-      "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
-    ];
-    let text = null;
-    let lastErr = null;
-    for (const url of sources) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        text = await res.text();
-        if (text && text.includes("LAT") || text.includes("STN") || text.split("\n").length > 10) break;
-        text = null;
-      } catch (e) {
-        lastErr = e;
-        text = null;
-      }
-    }
-    if (!text) throw lastErr || new Error("All buoy sources failed");
-    const lines = text.trim().split("\n").filter(l => l && !l.startsWith("#"));
-    buoyStations = [];
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 5) continue;
-      const id = parts[0];
-      const lat = parseFloat(parts[1]);
-      const lon = parseFloat(parts[2]);
-      if (isNaN(lat) || isNaN(lon)) continue;
-      // Only US-ish bounding box + territories roughly
-      if (lat < 15 || lat > 72 || lon < -180 || lon > -60) continue;
-      const year = parts[3], mon = parts[4], day = parts[5], hr = parts[6], min = parts[7];
-      const t = `${year}-${mon}-${day} ${hr}:${min}`;
-      const wdir = parts[8] !== "MM" ? parts[8] : null;
-      const wspd = parts[9] !== "MM" ? parts[9] : null;
-      const gst = parts[10] !== "MM" ? parts[10] : null;
-      const wvht = parts[11] !== "MM" ? parts[11] : null;
-      const dpd = parts[12] !== "MM" ? parts[12] : null;
-      const pres = parts[15] !== "MM" ? parts[15] : null;
-      const atmp = parts[17] !== "MM" ? parts[17] : null;
-      const wtmp = parts[18] !== "MM" ? parts[18] : null;
-      buoyStations.push({
-        id, lat, lng: lon, type: "buoy", name: `NDBC ${id}`,
-        state: inferState(lat, lon) || "",
-        data: { t, wdir, wspd, gst, wvht, dpd, pres, atmp, wtmp }
-      });
-    }
-    const el = document.getElementById("buoyCount");
-    if (el) el.textContent = String(buoyStations.length);
-    const bb = document.getElementById("buoyBadge");
-    if (bb) bb.textContent = String(buoyStations.length);
-    console.log("Loaded", buoyStations.length, "NDBC buoys (US filter)");
-    renderBuoyMarkers();
-  } catch (e) {
-    console.warn("Buoy load failed", e);
-    const el = document.getElementById("buoyCount");
-    if (el) el.textContent = "err";
-  }
-}
-
-function renderBuoyMarkers() {
-  if (buoyLayer) { map.removeLayer(buoyLayer); buoyLayer = null; }
-  if (!showBuoys || !buoyStations.length) return;
-  const group = L.layerGroup();
-  buoyStations.forEach(b => {
-    const icon = L.divIcon({
-      className: "",
-      html: `<div style="width:11px;height:11px;border-radius:2px;background:#00cec9;border:1px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.5);"></div>`,
-      iconSize: [11, 11],
-      iconAnchor: [5, 5]
-    });
-    const m = L.marker([b.lat, b.lng], { icon });
-    let tip = `<strong>${b.name}</strong><br/>${b.id}`;
-    if (b.data.wspd) tip += `<br/>Wind ${b.data.wspd} m/s`;
-    if (b.data.wvht) tip += `<br/>Waves ${b.data.wvht} m`;
-    if (b.data.atmp) tip += `<br/>Air ${b.data.atmp}°C`;
-    if (b.data.wtmp) tip += `<br/>Water ${b.data.wtmp}°C`;
-    m.bindTooltip(tip, { direction: "top", offset: [0, -6] });
-    m.on("click", () => openBuoy(b));
-    group.addLayer(m);
-  });
-  group.addTo(map);
-  buoyLayer = group;
-}
-
-function openBuoy(b) {
-  // Reuse modal for buoy summary
-  selectedStation = { id: b.id, name: b.name, lat: b.lat, lng: b.lng, type: "buoy", state: b.state };
-  const modal = document.getElementById("stationModal");
-  modal.classList.remove("hidden");
-  document.getElementById("modalStationName").textContent = b.name;
-  document.getElementById("modalStationId").textContent = b.id;
-  document.getElementById("officialLink").href = `https://www.ndbc.noaa.gov/station_page.php?station=${b.id}`;
-  const meta = document.getElementById("modalMeta");
-  meta.innerHTML = `
-    <div class="meta-item"><div class="mlabel">LAT</div><div class="mval">${b.lat.toFixed(4)}</div></div>
-    <div class="meta-item"><div class="mlabel">LON</div><div class="mval">${b.lng.toFixed(4)}</div></div>
-    <div class="meta-item"><div class="mlabel">TYPE</div><div class="mval">NDBC BUOY</div></div>
-    <div class="meta-item"><div class="mlabel">STATE ~</div><div class="mval">${b.state || "—"}</div></div>
-  `;
-  const d = b.data;
-  const cards = [];
-  if (d.wspd) cards.push(`<div class="data-card"><div class="dlabel">WIND SPEED</div><div class="dval">${d.wspd}<span class="dunit">m/s</span></div><div class="dtime">${d.t}</div></div>`);
-  if (d.wdir) cards.push(`<div class="data-card"><div class="dlabel">WIND DIR</div><div class="dval">${d.wdir}<span class="dunit">°</span></div></div>`);
-  if (d.gst) cards.push(`<div class="data-card"><div class="dlabel">GUST</div><div class="dval">${d.gst}<span class="dunit">m/s</span></div></div>`);
-  if (d.wvht) cards.push(`<div class="data-card"><div class="dlabel">WAVE HEIGHT</div><div class="dval">${d.wvht}<span class="dunit">m</span></div></div>`);
-  if (d.dpd) cards.push(`<div class="data-card"><div class="dlabel">DOM PERIOD</div><div class="dval">${d.dpd}<span class="dunit">s</span></div></div>`);
-  if (d.pres) cards.push(`<div class="data-card"><div class="dlabel">PRESSURE</div><div class="dval">${d.pres}<span class="dunit">hPa</span></div></div>`);
-  if (d.atmp) cards.push(`<div class="data-card"><div class="dlabel">AIR TEMP</div><div class="dval">${d.atmp}<span class="dunit">°C</span></div></div>`);
-  if (d.wtmp) cards.push(`<div class="data-card"><div class="dlabel">WATER TEMP</div><div class="dval">${d.wtmp}<span class="dunit">°C</span></div></div>`);
-  document.getElementById("tabContent").innerHTML = cards.length ? `<div class="data-grid">${cards.join("")}</div>` : `<div class="loading">No recent buoy data</div>`;
-  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-  document.querySelector('.tab[data-tab="latest"]')?.classList.add("active");
-}
-
-// ========== WATCH STRIP ==========
-function addToWatch(idOrName) {
-  const q = (idOrName || "").trim().toLowerCase();
-  if (!q) return;
-  let st = allStations.find(s => s.id.toLowerCase() === q || (s.name && s.name.toLowerCase().includes(q)));
-  if (!st) {
-    st = tidePredStations.find(s => s.id.toLowerCase() === q || (s.name && s.name.toLowerCase().includes(q)));
-  }
-  if (!st) {
-    const b = buoyStations.find(x => x.id.toLowerCase() === q);
-    if (b) st = { id: b.id, name: b.name, type: "buoy", lat: b.lat, lng: b.lng };
-  }
-  if (!st) { showToast("Station / buoy not found"); return; }
-  if (watchedList.some(w => w.id === st.id)) { showToast("Already watching"); return; }
-  watchedList.push({ id: st.id, name: st.name, type: st.type || "waterlevels", data: null });
-  renderWatchSlots();
-  refreshAllWatches();
-  showToast(`Watching ${st.name}`);
-}
-
-function renderWatchSlots() {
-  const box = document.getElementById("watchSlots");
-  if (!box) return;
-  if (!watchedList.length) {
-    box.innerHTML = `<div class="watch-empty">Select a state/territory then a station (or type an ID) to monitor in realtime — click a card for full data & tide graph</div>`;
-    return;
-  }
-  box.innerHTML = watchedList.map((w, i) => {
-    const d = w.data || {};
-    const exp = w.expanded ? "expanded" : "";
-    let vals = "—";
-    let more = "";
-    let floodHtml = "";
-    if (w.type === "buoy") {
-      vals = `Wind ${d.wspd || "—"} m/s · Waves ${d.wvht || "—"} m`;
-      more = `Air ${d.atmp || "—"}°C · Water ${d.wtmp || "—"}°C · ${d.pres || "—"} hPa`;
-    } else if (w.type === "currents") {
-      vals = `${d.s != null ? d.s + " kn" : "—"} @ ${d.d != null ? d.d + "°" : "—"}`;
-    } else {
-      vals = d.v != null ? `${d.v} ft MLLW` : "—";
-      if (w.extra) {
-        const e = w.extra;
-        more = [
-          e.air != null ? `Air ${e.air}°F` : null,
-          e.wtmp != null ? `WTemp ${e.wtmp}°F` : null,
-          e.wind != null ? `Wind ${e.wind} kn` : null,
-          e.nextTide ? `Next ${e.nextTide}` : null
-        ].filter(Boolean).join(" · ");
-      }
-      if (w.flood) {
-        floodHtml = `<div class="flood-badge ${w.flood.level}">${w.flood.label}</div>`;
-        if (w.floodLevels) {
-          const fl = w.floodLevels;
-          const parts = [];
-          if (fl.nws_minor != null) parts.push(`Min ${Number(fl.nws_minor).toFixed(1)}`);
-          if (fl.nws_moderate != null) parts.push(`Mod ${Number(fl.nws_moderate).toFixed(1)}`);
-          if (fl.nws_major != null) parts.push(`Maj ${Number(fl.nws_major).toFixed(1)}`);
-          if (parts.length) floodHtml += `<div class="flood-thresholds">Thresholds ft: ${parts.join(" · ")}</div>`;
-        }
-      }
-    }
-    const chartId = `watchChart_${w.id.replace(/[^a-zA-Z0-9]/g, "")}`;
-    return `<div class="watch-card ${exp}" data-id="${w.id}" data-idx="${i}">
-      <div class="wc-name">${w.name}</div>
-      <div class="wc-id">${w.id} · ${(w.type || "").toUpperCase()} · ${w.state || ""}</div>
-      <div class="wc-vals">${vals}</div>
-      ${more ? `<div class="wc-more">${more}</div>` : ""}
-      <div class="wc-time">${d.t || w.updated || ""}</div>
-      ${floodHtml}
-      ${w.expanded ? `<div class="wc-chart"><canvas id="${chartId}"></canvas></div>
-        <div class="wc-actions">
-          <button data-act="modal">OPEN FULL</button>
-          <button data-act="collapse">COLLAPSE</button>
-          <button data-act="popout">POPOUT</button>
-          <button type="button" data-act="remove">REMOVE</button>
-        </div>` : `<div class="wc-actions"><button data-act="expand">EXPAND + GRAPH</button><button data-act="popout">POPOUT</button><button data-act="remove">×</button></div>`}
-    </div>`;
-  }).join("");
-
-  box.querySelectorAll(".watch-card").forEach(card => {
-    const id = card.dataset.id;
-    const idx = parseInt(card.dataset.idx, 10);
-    card.querySelectorAll("button").forEach(btn => {
-      btn.onclick = (ev) => {
-        ev.stopPropagation();
-        const act = btn.dataset.act;
-        if (act === "remove") {
-          watchedList = watchedList.filter(w => w.id !== id);
-          renderWatchSlots();
-        } else if (act === "collapse") {
-          watchedList[idx].expanded = false;
-          renderWatchSlots();
-        } else if (act === "expand") {
-          watchedList[idx].expanded = true;
-          renderWatchSlots();
-          setTimeout(() => drawWatchChart(watchedList[idx]), 50);
-        } else if (act === "modal") {
-          openWatchStation(id);
-        } else if (act === "popout") {
-          const w = watchedList[idx];
-          if (typeof popoutWatchCard === "function") popoutWatchCard(w);
-        }
-      };
-    });
-    card.onclick = (ev) => {
-      if (ev.target.tagName === "BUTTON" || ev.target.tagName === "CANVAS") return;
-      const w = watchedList[idx];
-      if (!w.expanded) {
-        w.expanded = true;
-        renderWatchSlots();
-        setTimeout(() => drawWatchChart(w), 50);
-      } else {
-        openWatchStation(id);
-      }
-    };
-  });
-
-  // redraw charts for already expanded
-  watchedList.forEach(w => {
-    if (w.expanded) setTimeout(() => drawWatchChart(w), 80);
-  });
-}
-
-async function drawWatchChart(w) {
-  if (!w) return;
-  const chartId = `watchChart_${w.id.replace(/[^a-zA-Z0-9]/g, "")}`;
-  const canvas = document.getElementById(chartId);
-  if (!canvas) return;
-
-  // Destroy previous chart on this canvas if any
-  if (w._chart) {
-    try { w._chart.destroy(); } catch (_) {}
-    w._chart = null;
-  }
-
-  const today = new Date();
-  const fmt = (d) =>
-    `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-
-  let labels = [], values = [], hilo = [];
-
-  // Prefer hourly predictions (harmonic); fall back to hilo
-  try {
-    const urlH = `${DATAAPI}?begin_date=${fmt(today)}&range=48&station=${w.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=h&units=english&format=json&application=tides-currents-xplr`;
-    const resH = await fetch(urlH);
-    const jsonH = await resH.json();
-    if (jsonH.predictions && jsonH.predictions.length) {
-      labels = jsonH.predictions.map(p => p.t);
-      values = jsonH.predictions.map(p => parseFloat(p.v));
-    }
-  } catch (_) {}
-
-  try {
-    const urlL = `${DATAAPI}?begin_date=${fmt(today)}&range=72&station=${w.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
-    const resL = await fetch(urlL);
-    const jsonL = await resL.json();
-    if (jsonL.predictions && jsonL.predictions.length) {
-      hilo = jsonL.predictions;
-    }
-  } catch (_) {}
-
-  // If no hourly, synthesize stepped series from hilo for display
-  if (!values.length && hilo.length) {
-    labels = hilo.map(p => p.t);
-    values = hilo.map(p => parseFloat(p.v));
-  }
-
-  // Also try observed water level if available
-  let obsLabels = [], obsValues = [];
-  try {
-    const end = new Date();
-    const begin = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-    const urlO = `${DATAAPI}?begin_date=${fmt(begin)}&end_date=${fmt(end)}&station=${w.id}&product=water_level&datum=MLLW&time_zone=lst_ldt&units=english&format=json&application=tides-currents-xplr`;
-    const resO = await fetch(urlO);
-    const jsonO = await resO.json();
-    if (jsonO.data && jsonO.data.length) {
-      // subsample for chart density
-      const step = Math.max(1, Math.floor(jsonO.data.length / 80));
-      jsonO.data.forEach((d, i) => {
-        if (i % step === 0) {
-          obsLabels.push(d.t);
-          obsValues.push(parseFloat(d.v));
-        }
-      });
-    }
-  } catch (_) {}
-
-  if (!values.length && !obsValues.length) {
-    canvas.parentElement.innerHTML = `<div style="color:var(--text-muted);font-size:11px;padding:20px 0;text-align:center">No prediction / water level series available</div>`;
-    return;
-  }
-
-  const datasets = [];
-  if (values.length) {
-    datasets.push({
-      label: "Predicted (ft MLLW)",
-      data: values,
-      borderColor: "#a29bfe",
-      backgroundColor: "rgba(162,155,254,0.12)",
-      borderWidth: 1.5,
-      pointRadius: values.length < 20 ? 3 : 0,
-      tension: 0.3,
-      fill: true
-    });
-  }
-  if (obsValues.length) {
-    // separate chart labels issue - if only obs, use obs labels
-    if (!values.length) {
-      labels = obsLabels;
-      datasets.push({
-        label: "Observed (ft MLLW)",
-        data: obsValues,
-        borderColor: "#e67e22",
-        backgroundColor: "rgba(230,126,34,0.1)",
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.2,
-        fill: true
-      });
-    }
-  }
-
-  const ctx = canvas.getContext("2d");
-  w._chart = new Chart(ctx, {
-    type: "line",
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: true, labels: { color: "#8b9aab", font: { size: 10 } } },
-        title: {
-          display: true,
-          text: (w.name ? w.name + " — " : "") + (hilo.length ? `Next: ${hilo.slice(0,3).map(p => `${p.type} ${p.v}ft`).join(" · ")}` : "Tide curve (NOAA)"),
-          color: "#e8ecef",
-          font: { size: 11 }
-        }
+          x: {
+            ticks: { color: "#5c6b82", maxTicksLimit: 8, font: { size: 10 } },
+            grid: { color: "rgba(255,255,255,0.04)" },
+          },
+          y: {
+            ticks: { color: "#5c6b82", font: { size: 10 } },
+            grid: { color: "rgba(255,255,255,0.06)" },
+          },
+        },
       },
-      scales: {
-        x: { ticks: { color: "#5a6a7a", maxTicksLimit: 6, font: { size: 8 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-        y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" }, title: { display: true, text: "ft", color: "#5a6a7a", font: { size: 9 } } }
-      }
-    }
-  });
-}
-
-function openWatchStation(id) {
-  const st = allStations.find(s => s.id === id)
-    || tidePredStations.find(s => s.id === id)
-    || buoyStations.find(b => b.id === id);
-  if (!st) return;
-  if (st.type === "buoy" || buoyStations.some(b => b.id === id)) openBuoy(st);
-  else if (st.type === "tidepredictions" || tidePredStations.some(t => t.id === id)) openTidePred(st);
-  else openStation(st);
-}
-
-
-async function refreshAllWatches() {
-  if (!watchedList.length) return;
-  let anyChange = false;
-  for (const w of watchedList) {
-    if (w.type === "buoy") {
-      const b = buoyStations.find(x => x.id === w.id);
-      if (b) {
-        const prev = w.data ? JSON.stringify(w.data) : "";
-        w.data = b.data;
-        if (prev && prev !== JSON.stringify(w.data)) anyChange = true;
-      }
-    } else {
-      const d = await fetchLatest(w.id, "water_level");
-      if (d) {
-        const prev = w.data ? `${w.data.v}|${w.data.t}` : "";
-        const now = `${d.v}|${d.t}`;
-        if (prev && prev !== now) {
-          anyChange = true;
-          freshIds.add(w.id);
-        }
-        w.data = d;
-      }
-      // enrich with met + next tide
-      const extra = {};
-      try {
-        const air = await fetchLatest(w.id, "air_temperature");
-        if (air) extra.air = air.v;
-      } catch (_) {}
-      try {
-        const wt = await fetchLatest(w.id, "water_temperature");
-        if (wt) extra.wtmp = wt.v;
-      } catch (_) {}
-      try {
-        const wind = await fetchLatest(w.id, "wind");
-        if (wind) extra.wind = wind.s;
-      } catch (_) {}
-      try {
-        const today = new Date();
-        const fmt = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}`;
-        const url = `${DATAAPI}?begin_date=${fmt(today)}&range=48&station=${w.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
-        const res = await fetch(url);
-        const json = await res.json();
-        if (json.predictions && json.predictions[0]) {
-          const p = json.predictions[0];
-          extra.nextTide = `${p.type} ${p.v}ft ${p.t}`;
-          w.hilo = json.predictions;
-        }
-      } catch (_) {}
-      // Flood risk
-      try {
-        const fl = await fetchFloodLevels(w.id);
-        w.floodLevels = fl;
-        if (fl && w.data?.v != null) {
-          w.flood = floodStatus(w.data.v, fl);
-        }
-      } catch (_) {}
-      w.extra = extra;
-      w.updated = new Date().toISOString().substr(11, 8) + " UTC";
-    }
+    });
+    chartInstances.set(key, chart);
   }
-  renderWatchSlots();
-  if (anyChange) {
-    playSolChime();
-    renderMarkers();
-  }
-}
 
-
-document.addEventListener("DOMContentLoaded", () => {
-  setTimeout(() => {
-    const st = document.getElementById("soundToggle");
-    if (st) {
-      st.onclick = () => {
-        soundEnabled = !soundEnabled;
-        st.textContent = soundEnabled ? "🔊 SOUND ON" : "🔇 SOUND OFF";
-        st.classList.toggle("on", soundEnabled);
-        showToast(soundEnabled ? "SOL chime enabled" : "SOL chime muted");
-      };
-      st.classList.add("on");
-    }
-    const tb = document.getElementById("toggleBuoys");
-    if (tb) {
-      tb.onclick = () => {
-        showBuoys = !showBuoys;
-        tb.classList.toggle("active", showBuoys);
-        renderBuoyMarkers();
-        showToast(showBuoys ? "Buoys visible" : "Buoys hidden");
-      };
-    }
-    const tp = document.getElementById("toggleTidePred");
-    if (tp) {
-      tp.onclick = () => {
-        showTidePred = !showTidePred;
-        tp.classList.toggle("active", showTidePred);
-        renderTidePredMarkers();
-        showToast(showTidePred ? "Tide prediction stations ON map" : "Tide prediction stations hidden");
-      };
-    }
-    map?.on("zoomend", () => {
-      if (showTidePred) renderTidePredMarkers();
-    });
-    const tw = document.getElementById("toggleWarnings");
-    if (tw) {
-      tw.onclick = () => {
-        showWarnings = !showWarnings;
-        tw.classList.toggle("active", showWarnings);
-        renderNwsAlertPolygons();
-        showToast(showWarnings ? "NWS alert zones ON map" : "NWS alert zones hidden");
-      };
-    }
-    document.getElementById("refreshWarningsBtn")?.addEventListener("click", () => {
-      loadNwsWarnings();
-      showToast("Refreshing NWS coastal flood alerts…");
-    });
-    document.getElementById("addWatchBtn")?.addEventListener("click", () => {
-      const typed = document.getElementById("watchInput")?.value?.trim();
-      const fromSel = document.getElementById("watchStationSelect")?.value;
-      addToWatch(typed || fromSel);
-      const inp = document.getElementById("watchInput");
-      if (inp) inp.value = "";
-    });
-    document.getElementById("watchInput")?.addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        addToWatch(e.target.value);
-        e.target.value = "";
-      }
-    });
-    document.getElementById("clearWatchBtn")?.addEventListener("click", () => {
-      watchedList = [];
-      renderWatchSlots();
-    });
-  }, 500);
-});
-
-
-// ========== WATCH STATE → STATION DROPDOWNS ==========
-function populateWatchDropdowns() {
-  const stateSel = document.getElementById("watchStateSelect");
-  const stnSel = document.getElementById("watchStationSelect");
-  if (!stateSel || !stnSel) return;
-
-  const states = [...new Set(allStations.map(s => s.state).filter(Boolean))].sort();
-  // Also include territories that may appear
-  const extra = ["PR","VI","GU","AS","MP","DC"];
-  extra.forEach(e => { if (!states.includes(e) && allStations.some(s => s.state === e)) states.push(e); });
-  states.sort();
-
-  stateSel.innerHTML = '<option value="">STATE / TERRITORY</option>';
-  states.forEach(st => {
-    const o = document.createElement("option");
-    o.value = st;
-    o.textContent = st;
-    stateSel.appendChild(o);
-  });
-
-  stateSel.onchange = () => {
-    const st = stateSel.value;
-    stnSel.innerHTML = '<option value="">STATION</option>';
-    stnSel.disabled = !st;
-    if (!st) return;
-    const merged = [...allStations, ...tidePredStations];
-    const seen = new Set();
-    const list = merged
-      .filter(s => s.state === st && !seen.has(s.id) && (seen.add(s.id) || true))
-      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-    list.forEach(s => {
-      const o = document.createElement("option");
-      o.value = s.id;
-      o.textContent = `${s.name} (${s.id})`;
-      stnSel.appendChild(o);
-    });
-  };
-
-  stnSel.onchange = () => {
-    if (stnSel.value) {
-      addToWatch(stnSel.value);
-      // keep selection visible
-    }
-  };
-}
-
-
-// ========== SOFT REFRESH & RESET VIEW ==========
-function softRefresh() {
-  showToast("Soft refresh — fetching latest data...");
-  loadActivePanel(true);
-  refreshAllWatches();
-  if (showBuoys) loadBuoys();
-  if (selectedStation) {
-    const activeTab = document.querySelector(".tab.active");
-    if (activeTab) loadTab(activeTab.dataset.tab, true);
-  }
-  // recolor markers if overlay active
-  if (overlayMode !== "none") renderMarkers();
-  if (showTidePred) renderTidePredMarkers();
-  loadNwsWarnings();
-  showToast("Soft refresh complete — watches & selection kept");
-}
-
-function resetView() {
-  map.setView([39.5, -98.35], 4);
-  document.getElementById("stateFilter").value = "";
-  document.getElementById("typeFilter").value = "";
-  document.getElementById("productFilter").value = "none";
-  overlayMode = "none";
-  document.getElementById("showWaterLevels").checked = true;
-  document.getElementById("showCurrents").checked = true;
-  document.getElementById("showPorts").checked = false;
-  applyFilters();
-  showToast("View reset — map & filters restored (watches kept)");
-}
-
-
-// ========== TIDE PREDICTION STATIONS (NOAA Tide Predictions) ==========
-async function loadTidePredStations() {
-  try {
-    const res = await fetch(`${MDAPI}/stations.json?type=tidepredictions`);
-    const json = await res.json();
-    tidePredStations = (json.stations || []).map(s => ({
-      id: s.id,
-      name: s.name,
-      lat: s.lat,
-      lng: s.lng,
-      state: s.state || "",
-      type: "tidepredictions",
-      tidal: s.tidal,
-      tideType: s.tideType || "",
-      affiliations: s.affiliations || ""
-    })).filter(s => s.lat && s.lng);
-    console.log("Tide prediction stations:", tidePredStations.length);
-    const el = document.getElementById("tidePredCount");
-    if (el) el.textContent = String(tidePredStations.length);
-    // Always try render if toggle on (default true)
-    renderTidePredMarkers();
-    const tpBtn = document.getElementById("toggleTidePred");
-    if (tpBtn) tpBtn.classList.toggle("active", showTidePred);
-  } catch (e) {
-    console.warn("Tide pred stations load failed", e);
-  }
-}
-
-function renderTidePredMarkers() {
-  if (tidePredLayer) { map.removeLayer(tidePredLayer); tidePredLayer = null; }
-  if (!showTidePred || !tidePredStations.length || !map) return;
-
-  const z = map.getZoom();
-  // Progressive density
-  let step = 1;
-  if (z < 5) step = 8;
-  else if (z < 7) step = 3;
-  else if (z < 9) step = 2;
-  const list = step === 1 ? tidePredStations : tidePredStations.filter((_, i) => i % step === 0);
-
-  const group = L.layerGroup();
-  list.forEach(s => {
-    if (s.lat == null || s.lng == null) return;
-    const icon = L.divIcon({
-      className: "",
-      html: `<div class="tide-pred-dot" title="${s.name}"></div>`,
-      iconSize: [12, 12],
-      iconAnchor: [6, 6]
-    });
-    const m = L.marker([s.lat, s.lng], { icon, interactive: true });
-    m.bindTooltip(`<strong>${s.name}</strong><br/>${s.id} · ${s.state || ""} · TIDE PRED`, { direction: "top", offset: [0, -6] });
-    m.on("click", () => openTidePred(s));
-    group.addLayer(m);
-  });
-  group.addTo(map);
-  tidePredLayer = group;
-  console.log("Rendered tide pred markers:", list.length, "of", tidePredStations.length);
-}
-
-async function openTidePred(s) {
-  selectedStation = s;
-  const modal = document.getElementById("stationModal");
-  modal.classList.remove("hidden");
-  document.getElementById("modalStationName").textContent = s.name || "TIDE PREDICTION";
-  document.getElementById("modalStationId").textContent = s.id;
-  document.getElementById("officialLink").href =
-    `https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${s.id}`;
-
-  document.getElementById("modalMeta").innerHTML = `
-    <div class="meta-item"><div class="mlabel">LAT</div><div class="mval">${s.lat?.toFixed(4) ?? "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">LON</div><div class="mval">${s.lng?.toFixed(4) ?? "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">STATE</div><div class="mval">${s.state || "—"}</div></div>
-    <div class="meta-item"><div class="mlabel">TYPE</div><div class="mval">TIDE PREDICTIONS</div></div>
-    <div class="meta-item"><div class="mlabel">TIDE</div><div class="mval">${s.tideType || "—"}</div></div>
-  `;
-
-  const content = document.getElementById("tabContent");
-  content.innerHTML = `<div class="loading">LOADING HIGH/LOW PREDICTIONS...</div>`;
-  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-  document.querySelector('.tab[data-tab="predictions"]')?.classList.add("active");
-
-  // Fetch next ~72h hilo predictions
-  try {
-    const today = new Date();
-    const fmt = (d) =>
-      `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-    const url = `${DATAAPI}?begin_date=${fmt(today)}&range=72&station=${s.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=hilo&units=english&format=json&application=tides-currents-xplr`;
-    const res = await fetch(url);
-    const json = await res.json();
-    if (!json.predictions || !json.predictions.length) {
-      content.innerHTML = `<div class="loading">No predictions available for this station</div>`;
-      return;
-    }
-    const rows = json.predictions.slice(0, 16).map(p => `
-      <div class="data-card ${p.type === "H" || (p.type||"").toLowerCase().includes("high") ? "highlight" : ""}">
-        <div class="dlabel">${p.type || "TIDE"}</div>
-        <div class="dval">${p.v}<span class="dunit">ft MLLW</span></div>
-        <div class="dtime">${p.t}</div>
+  function openBuoyWindow(b) {
+    const key = b.id;
+    const body = `
+      <div class="meta-grid">
+        <div class="meta-card"><div class="ml">Buoy ID</div><div class="mv mono">${b.id}</div></div>
+        <div class="meta-card"><div class="ml">Type</div><div class="mv">NDBC</div></div>
+        <div class="meta-card"><div class="ml">Lat / Lon</div><div class="mv mono">${fmtNum(b.lat,4)}, ${fmtNum(b.lng,4)}</div></div>
+        <div class="meta-card"><div class="ml">Wind</div><div class="mv accent">${b.wind ?? "—"} kn</div></div>
+        <div class="meta-card"><div class="ml">Gust</div><div class="mv">${b.gst ?? "—"} kn</div></div>
+        <div class="meta-card"><div class="ml">Wave height</div><div class="mv accent">${b.wvht ?? "—"} m</div></div>
+        <div class="meta-card"><div class="ml">Air temp</div><div class="mv">${b.atmp ?? "—"} °C</div></div>
+        <div class="meta-card"><div class="ml">Water temp</div><div class="mv">${b.wtmp ?? "—"} °C</div></div>
       </div>
-    `).join("");
-    content.innerHTML = `
-      <div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">
-        HIGH / LOW TIDE PREDICTIONS (next ~72h) · 
-        <a href="https://tidesandcurrents.noaa.gov/noaatidepredictions.html?id=${s.id}" target="_blank" style="color:var(--orange)">Full NOAA Tide Predictions ↗</a>
+      <div class="btn-row">
+        <a class="action-btn primary" href="https://www.ndbc.noaa.gov/station_page.php?station=${b.id}" target="_blank" rel="noopener">NDBC station ↗</a>
+        <button type="button" class="action-btn" data-act="center">Center map</button>
       </div>
-      <div class="data-grid">${rows}</div>
-      <div style="color:var(--text-dim);font-size:11px;margin:12px 0 6px">PREDICTED TIDE CURVE (48h)</div>
-      <div class="chart-wrap"><canvas id="tidePredChart"></canvas></div>
-      <div style="margin-top:12px">
-        <button id="addTideToMapBtn" class="watch-btn" style="margin-right:8px">☆ WATCH THIS STATION</button>
-        <button id="showOnMapBtn" class="watch-btn">CENTER ON MAP</button>
+      <div class="source-bar">
+        Source: <a href="https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt" target="_blank" rel="noopener">NDBC latest_obs</a>
       </div>
     `;
-    // Draw hourly curve when available
-    (async () => {
-      try {
-        const urlH = `${DATAAPI}?begin_date=${fmt(today)}&range=48&station=${s.id}&product=predictions&datum=MLLW&time_zone=lst_ldt&interval=h&units=english&format=json&application=tides-currents-xplr`;
-        const resH = await fetch(urlH);
-        const jsonH = await resH.json();
-        let labs = [], vals = [];
-        if (jsonH.predictions && jsonH.predictions.length) {
-          labs = jsonH.predictions.map(p => p.t);
-          vals = jsonH.predictions.map(p => parseFloat(p.v));
-        } else {
-          labs = json.predictions.map(p => p.t);
-          vals = json.predictions.map(p => parseFloat(p.v));
+    const win = openFloat(key, b.name || b.id, "NDBC buoy", body);
+    win.querySelector('[data-act="center"]').onclick = () => map.setView([b.lat, b.lng], 10);
+  }
+
+  function openAlertWindow(a) {
+    const key = "alert_" + a.id;
+    const body = `
+      <div class="meta-grid">
+        <div class="meta-card" style="grid-column:1/-1"><div class="ml">Event</div><div class="mv">${a.event}</div></div>
+        <div class="meta-card"><div class="ml">Severity</div><div class="mv">${a.severity || "—"}</div></div>
+        <div class="meta-card"><div class="ml">Area</div><div class="mv" style="font-size:12px">${a.area || "—"}</div></div>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin:10px 0;white-space:pre-wrap;max-height:180px;overflow:auto">${(a.headline || a.desc || "").slice(0, 800)}</p>
+      <div class="source-bar">
+        Source: <a href="https://api.weather.gov/" target="_blank" rel="noopener">NWS Alerts API</a>
+        ${a.url ? ` · <a href="${a.url}" target="_blank" rel="noopener">Full alert</a>` : ""}
+      </div>
+    `;
+    openFloat(key, a.event, a.severity || "Alert", body, { width: 420 });
+  }
+
+  // ========== nowCOAST / RADAR (simplified reliable) ==========
+  function initNowCoast() {
+    $$("input[data-nc]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        const id = cb.dataset.nc;
+        if (id === "radar") {
+          $("#radarControls").classList.toggle("hidden", !cb.checked);
+          if (cb.checked) startRadar();
+          else stopRadar();
         }
-        const canvas = document.getElementById("tidePredChart");
-        if (!canvas || !vals.length) return;
-        if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-        chartInstance = new Chart(canvas.getContext("2d"), {
-          type: "line",
-          data: {
-            labels: labs,
-            datasets: [{
-              label: (s.name || s.id) + " — Predicted tide (ft MLLW)",
-              data: vals,
-              borderColor: "#a29bfe",
-              backgroundColor: "rgba(162,155,254,0.15)",
-              borderWidth: 2,
-              pointRadius: vals.length < 24 ? 3 : 0,
-              tension: 0.35,
-              fill: true
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-              x: { ticks: { color: "#5a6a7a", maxTicksLimit: 8, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-              y: { ticks: { color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.06)" }, title: { display: true, text: "ft MLLW", color: "#5a6a7a" } }
-            }
-          }
-        });
-      } catch (e) { console.warn("tide chart", e); }
-    })();
-    document.getElementById("addTideToMapBtn")?.addEventListener("click", () => {
-      addToWatch(s.id);
-      showToast(`Added ${s.name} to watch panel`);
-    });
-    document.getElementById("showOnMapBtn")?.addEventListener("click", () => {
-      map.setView([s.lat, s.lng], 10);
-      closeModal();
-    });
-  } catch (e) {
-    content.innerHTML = `<div class="loading">Error loading predictions: ${e.message}</div>`;
-  }
-
-  // Watch button in footer
-  const watchBtn = document.getElementById("watchBtn");
-  if (watchBtn) {
-    const already = watchedList.some(w => w.id === s.id);
-    watchBtn.textContent = already ? "★ ON WATCH" : "☆ WATCH";
-    watchBtn.classList.toggle("active", already);
-    watchBtn.onclick = () => {
-      addToWatch(s.id);
-      watchBtn.textContent = "★ ON WATCH";
-      watchBtn.classList.add("active");
-    };
-  }
-}
-
-
-// ========== COASTAL FLOOD RISK ==========
-async function fetchFloodLevels(stationId) {
-  try {
-    const res = await fetch(`${MDAPI}/stations/${stationId}/floodlevels.json?units=english`);
-    const json = await res.json();
-    if (json.error) return null;
-    return {
-      nos_minor: json.nos_minor,
-      nos_moderate: json.nos_moderate,
-      nos_major: json.nos_major,
-      nws_minor: json.nws_minor,
-      nws_moderate: json.nws_moderate,
-      nws_major: json.nws_major,
-      action: json.action
-    };
-  } catch {
-    return null;
-  }
-}
-
-function floodStatus(wl, fl) {
-  if (wl == null || !fl) return { level: "unknown", label: "NO THRESHOLD DATA" };
-  const v = parseFloat(wl);
-  // Prefer NWS if available, else NOS
-  const major = fl.nws_major ?? fl.nos_major;
-  const moderate = fl.nws_moderate ?? fl.nos_moderate;
-  const minor = fl.nws_minor ?? fl.nos_minor;
-  const action = fl.action;
-  if (major != null && v >= major) return { level: "major", label: "MAJOR FLOOD" };
-  if (moderate != null && v >= moderate) return { level: "moderate", label: "MODERATE FLOOD" };
-  if (minor != null && v >= minor) return { level: "minor", label: "MINOR FLOOD" };
-  if (action != null && v >= action) return { level: "action", label: "ACTION STAGE" };
-  return { level: "ok", label: "BELOW FLOOD" };
-}
-
-async function renderFlood(station, container) {
-  container.innerHTML = `<div class="loading">LOADING FLOOD THRESHOLDS...</div>`;
-  const fl = await fetchFloodLevels(station.id);
-  const wlData = await fetchLatest(station.id, "water_level");
-  const wl = wlData?.v != null ? parseFloat(wlData.v) : null;
-  const status = floodStatus(wl, fl);
-
-  if (!fl) {
-    container.innerHTML = `<div class="loading">No coastal flood threshold data for this station.<br/>
-      <a href="https://tidesandcurrents.noaa.gov/inundationdb/" target="_blank" style="color:var(--orange)">Coastal Inundation Dashboard ↗</a></div>`;
-    return;
-  }
-
-  const cards = [];
-  if (wl != null) {
-    cards.push(`<div class="data-card highlight"><div class="dlabel">CURRENT WATER LEVEL</div><div class="dval">${wl.toFixed(2)}<span class="dunit">ft MLLW</span></div><div class="dtime">${wlData?.t || ""}</div></div>`);
-  }
-  cards.push(`<div class="data-card"><div class="dlabel">FLOOD STATUS</div><div class="dval"><span class="flood-badge ${status.level}">${status.label}</span></div></div>`);
-
-  const thresh = [
-    ["ACTION", fl.action],
-    ["NWS MINOR", fl.nws_minor],
-    ["NWS MODERATE", fl.nws_moderate],
-    ["NWS MAJOR", fl.nws_major],
-    ["NOS MINOR", fl.nos_minor],
-    ["NOS MODERATE", fl.nos_moderate],
-    ["NOS MAJOR", fl.nos_major]
-  ];
-  thresh.forEach(([lab, val]) => {
-    if (val != null) {
-      const above = wl != null && wl >= val;
-      cards.push(`<div class="data-card"><div class="dlabel">${lab}</div><div class="dval">${Number(val).toFixed(2)}<span class="dunit">ft</span></div><div class="dtime">${above ? "▲ EXCEEDED" : "below"}</div></div>`);
-    }
-  });
-
-  container.innerHTML = `
-    <div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">
-      Coastal flood thresholds (NOAA CO-OPS) · 
-      <a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=${station.id}" target="_blank" style="color:var(--orange)">Station page ↗</a> · 
-      <a href="https://tidesandcurrents.noaa.gov/inundationdb/" target="_blank" style="color:var(--orange)">Inundation Dashboard ↗</a>
-    </div>
-    <div class="data-grid">${cards.join("")}</div>
-  `;
-}
-
-
-// ========== NWS COASTAL FLOOD WARNINGS ==========
-async function loadNwsWarnings() {
-  const listEl = document.getElementById("warningsList");
-  const countEl = document.getElementById("warningsCount");
-  try {
-    const events = [
-      "Coastal Flood Warning",
-      "Coastal Flood Watch",
-      "Coastal Flood Advisory",
-      "Coastal Flood Statement"
-    ].map(e => encodeURIComponent(e)).join(",");
-    const url = `https://api.weather.gov/alerts/active?event=${events}`;
-    const res = await fetch(url, {
-      headers: {
-        "Accept": "application/geo+json",
-        "User-Agent": "TIDES-CURRENTS-XPLR (github.io dashboard)"
-      }
-    });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const json = await res.json();
-    nwsAlerts = (json.features || []).map(f => {
-      const p = f.properties || {};
-      return {
-        id: p.id || f.id,
-        event: p.event,
-        severity: (p.severity || "Unknown").toLowerCase(),
-        urgency: p.urgency,
-        headline: p.headline,
-        description: p.description,
-        instruction: p.instruction,
-        areaDesc: p.areaDesc,
-        senderName: p.senderName,
-        sent: p.sent,
-        effective: p.effective,
-        expires: p.expires,
-        ends: p.ends,
-        geometry: f.geometry,
-        url: p["@id"] || (p.id ? `https://api.weather.gov/alerts/${encodeURIComponent(p.id)}` : null)
-      };
-    });
-    // Sort: Warning > Watch > Advisory > Statement
-    const rank = { warning: 0, watch: 1, advisory: 2, statement: 3 };
-    nwsAlerts.sort((a, b) => {
-      const ra = rank[(a.event || "").toLowerCase().split(" ").pop()] ?? 9;
-      const rb = rank[(b.event || "").toLowerCase().split(" ").pop()] ?? 9;
-      return ra - rb;
-    });
-
-    if (countEl) {
-      countEl.textContent = nwsAlerts.length
-        ? `${nwsAlerts.length} ACTIVE · ${new Date().toISOString().substr(11, 8)} UTC`
-        : "No active coastal flood alerts";
-    }
-    renderWarningsList();
-    renderNwsAlertPolygons();
-  } catch (e) {
-    console.warn("NWS alerts failed", e);
-    if (countEl) countEl.textContent = "Alerts unavailable";
-    if (listEl) listEl.innerHTML = `<div class="loading">Could not load NWS alerts: ${e.message}</div>`;
-  }
-}
-
-function renderWarningsList() {
-  const listEl = document.getElementById("warningsList");
-  if (!listEl) return;
-  if (!nwsAlerts.length) {
-    listEl.innerHTML = `<div class="loading">No active Coastal Flood Warning / Watch / Advisory / Statement</div>`;
-    return;
-  }
-  listEl.innerHTML = nwsAlerts.map((a, i) => {
-    const exp = a.expires ? new Date(a.expires).toLocaleString() : "—";
-    return `<div class="warning-card severity-${a.severity}" data-idx="${i}">
-      <div class="w-event">${a.event || "ALERT"} · ${a.severity.toUpperCase()}</div>
-      <div class="w-area">${a.areaDesc || "—"}</div>
-      <div class="w-headline">${a.headline || ""}</div>
-      <div class="w-meta">${a.senderName || ""} · Exp ${exp}</div>
-    </div>`;
-  }).join("");
-
-  listEl.querySelectorAll(".warning-card").forEach(card => {
-    card.onclick = () => {
-      const a = nwsAlerts[parseInt(card.dataset.idx, 10)];
-      if (!a) return;
-      focusNwsAlert(a);
-    };
-  });
-}
-
-function renderNwsAlertPolygons() {
-  if (nwsAlertLayer) {
-    map.removeLayer(nwsAlertLayer);
-    nwsAlertLayer = null;
-  }
-  if (!showWarnings || !map || !nwsAlerts.length) return;
-
-  const group = L.layerGroup();
-  const colors = {
-    warning: "#c0392b",
-    watch: "#e74c3c",
-    advisory: "#e67e22",
-    statement: "#f1c40f"
-  };
-
-  nwsAlerts.forEach((a, i) => {
-    if (!a.geometry) return;
-    const key = (a.event || "").toLowerCase();
-    let color = "#e67e22";
-    if (key.includes("warning")) color = colors.warning;
-    else if (key.includes("watch")) color = colors.watch;
-    else if (key.includes("advisory")) color = colors.advisory;
-    else if (key.includes("statement")) color = colors.statement;
-
-    try {
-      const layer = L.geoJSON(a.geometry, {
-        style: {
-          color,
-          weight: 2,
-          fillColor: color,
-          fillOpacity: 0.18,
-          opacity: 0.85
-        },
-        onEachFeature: (feat, lyr) => {
-          lyr.bindTooltip(
-            `<strong>${a.event}</strong><br/>${(a.areaDesc || "").slice(0, 80)}`,
-            { sticky: true }
-          );
-          lyr.on("click", () => focusNwsAlert(a));
-        }
+        saveLayoutLocal();
       });
-      group.addLayer(layer);
+    });
+    $("#radarPlayBtn").onclick = () => {
+      radarState.playing = !radarState.playing;
+      $("#radarPlayBtn").textContent = radarState.playing ? "⏸" : "▶";
+      if (radarState.playing) tickRadar();
+      else clearTimeout(radarState.timer);
+    };
+    $("#radarPrevBtn").onclick = () => { radarState.idx = Math.max(0, radarState.idx - 1); showRadarFrame(); };
+    $("#radarNextBtn").onclick = () => { radarState.idx = Math.min(radarState.frames.length - 1, radarState.idx + 1); showRadarFrame(); };
+    $("#radarOpacity").oninput = () => {
+      if (radarState.layer) radarState.layer.setOpacity((+$("#radarOpacity").value) / 100);
+    };
+    $("#radarRefreshBtn").onclick = () => startRadar();
+  }
+
+  async function startRadar() {
+    stopRadar();
+    // RainViewer public API (CORS friendly)
+    try {
+      const r = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+      const j = await r.json();
+      const frames = (j.radar?.past || []).concat(j.radar?.nowcast || []).slice(-12);
+      radarState.frames = frames.map(f => ({
+        time: f.time,
+        url: `https://tilecache.rainviewer.com${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
+      }));
+      radarState.idx = radarState.frames.length - 1;
+      showRadarFrame();
+      radarState.playing = true;
+      $("#radarPlayBtn").textContent = "⏸";
+      tickRadar();
     } catch (e) {
-      console.warn("alert geometry", e);
+      toast("Radar frames unavailable");
     }
-  });
-
-  group.addTo(map);
-  nwsAlertLayer = group;
-}
-
-function focusNwsAlert(a) {
-  if (!a) return;
-  // Zoom to geometry if present
-  if (a.geometry) {
-    try {
-      const tmp = L.geoJSON(a.geometry);
-      map.fitBounds(tmp.getBounds().pad(0.2));
-    } catch (_) {}
   }
-  // Floating window
-  const modal = document.getElementById("alertModal");
-  if (!modal) return;
-  document.getElementById("alertModalEvent").textContent = a.event || "NWS ALERT";
-  document.getElementById("alertModalSeverity").textContent =
-    `${(a.severity || "").toUpperCase()} · ${(a.urgency || "")} · ${a.senderName || ""}`;
-  document.getElementById("alertModalArea").textContent = a.areaDesc || "";
-  document.getElementById("alertModalHeadline").textContent = a.headline || "";
-  document.getElementById("alertModalDesc").textContent = a.description || "No description available.";
-  document.getElementById("alertModalInstr").textContent = a.instruction || "";
-  const exp = a.expires ? new Date(a.expires).toLocaleString() : "—";
-  const eff = a.effective ? new Date(a.effective).toLocaleString() : "—";
-  document.getElementById("alertModalMeta").innerHTML =
-    `Effective ${eff} · Expires ${exp}<br/><a href="https://www.weather.gov" target="_blank" style="color:var(--orange)">weather.gov</a>`;
-  modal.classList.remove("hidden");
-  showToast(`${a.event}: ${(a.areaDesc || "").split(";")[0]}`);
-}
 
-function closeAlertModal() {
-  document.getElementById("alertModal")?.classList.add("hidden");
-}
-
-
-
-
-// ========== nowCOAST / NOAA MAP LAYERS (WMS + Esri + click identify) ==========
-const NC_WMS = "https://nowcoast.noaa.gov/geoserver/ows";
-const NC_WMS_MAP = {
-  alerts_nc: "alerts:watches_warnings_advisories",
-  bluetopo: "bluetopo:bathymetry",
-  geopotential: "geopotential:sgeoid2022",
-  gridded_wx: "ndfd_temperature:air_temperature",
-  inland_flood: "stofs3d:stofs3d_atlc_water_disturbance",
-  lightning: "lightning_detection:ldn_lightning_strike_density",
-  marine_pathogen: "marine_pathogen:chesbay_vibrio_vulnificus",
-  precip_amt: "ndfd_precipitation:6hr_precipitation_amount",
-  s100: "s100:s100_interoperable_coverage",
-  sst_nc: "sea_surface_temperature:global_sea_surface_temperature",
-  sfc_currents: "wcofs:wcofs_sfc_currents",
-  tropical_nc: "tropical_cyclones:active_tropical_cyclones",
-  vlm: "vertical_land_motion:vlm_velocity",
-  waterlevels_nc: "stofs2d:stofs2d_cwl_max_contours",
-  radar: "weather_radar:base_reflectivity_mosaic",
-  satellite: "satellite:goes_longwave_imagery",
-  sst: "sea_surface_temperature:global_sea_surface_temperature",
-  precip: "ndfd_precipitation:6hr_precipitation_amount",
-  s102: "s100:s102_coverage",
-  s104: "s100:s104_coverage",
-  s111: "s100:s111_coverage",
-  waterlevels: "stofs3d:stofs3d_cwl_stations",
-  federal: "boundaries:military_boundaries"
-};
-const ncLayerState = {};
-let rainViewerHost = "https://tilecache.rainviewer.com";
-let rainViewerRadarPath = null;
-let ncIdentifyBound = false;
-
-function makeWmsLayer(layers, opts = {}) {
-  return L.tileLayer.wms(NC_WMS, {
-    layers,
-    format: "image/png",
-    transparent: true,
-    version: "1.1.1",
-    opacity: opts.opacity ?? 0.75,
-    zIndex: opts.zIndex ?? 360,
-    attribution: opts.attribution || "NOAA nowCOAST",
-    uppercase: true,
-    tileSize: 256,
-    updateWhenIdle: false
-  });
-}
-
-function setNcOpacity(pct) {
-  const o = (pct || 70) / 100;
-  Object.values(ncLayerState).forEach(lyr => {
-    if (!lyr) return;
-    if (lyr.setOpacity) lyr.setOpacity(o);
-    else if (lyr.eachLayer) lyr.eachLayer(l => { if (l.setOpacity) l.setOpacity(o); });
-  });
-}
-
-function removeNc(key) {
-  if (key === "radar" && radarPlayer?.enabled) {
-    // lifecycle owned by disableRadarLayer / showRadarFrame
-    return;
+  function showRadarFrame() {
+    const f = radarState.frames[radarState.idx];
+    if (!f) return;
+    if (radarState.layer) map.removeLayer(radarState.layer);
+    radarState.layer = L.tileLayer(f.url, {
+      opacity: (+$("#radarOpacity").value) / 100,
+      zIndex: 300,
+    }).addTo(map);
+    const d = new Date(f.time * 1000);
+    $("#radarFrameLabel").textContent = `Frame ${radarState.idx + 1}/${radarState.frames.length}`;
+    $("#radarTimeLabel").textContent = d.toISOString().slice(11, 16) + " UTC";
   }
-  if (!ncLayerState[key]) return;
-  try {
-    if (ncLayerState[key]._redrawHandler) map.off("moveend", ncLayerState[key]._redrawHandler);
-    map.removeLayer(ncLayerState[key]);
-  } catch (_) {}
-  ncLayerState[key] = null;
-}
 
+  function tickRadar() {
+    if (!radarState.playing || !radarState.frames.length) return;
+    radarState.idx = (radarState.idx + 1) % radarState.frames.length;
+    showRadarFrame();
+    radarState.timer = setTimeout(tickRadar, 700);
+  }
 
-// ========== NEXRAD radar — IEM primary (stable) + optional sources ==========
-const radarPlayer = {
-  source: "iem", // iem | rainviewer | nowcoast
-  host: "https://tilecache.rainviewer.com",
-  frames: [], // { id, label, time, urlTemplate } or RainViewer {time,path}
-  index: 0,
-  playing: false,
-  timer: null,
-  layer: null,
-  speed: 3,
-  opacity: 0.75,
-  enabled: false
-};
+  function stopRadar() {
+    radarState.playing = false;
+    clearTimeout(radarState.timer);
+    if (radarState.layer) { map.removeLayer(radarState.layer); radarState.layer = null; }
+    $("#radarPlayBtn").textContent = "▶";
+  }
 
-/** Iowa State Mesonet CONUS N0Q mosaic — very reliable public XYZ tiles */
-function buildIemFrames() {
-  const frames = [];
-  // Fewer frames = faster loop (every 10 min, oldest → newest)
-  for (let m of [50, 40, 30, 20, 10, 5]) {
-    const mm = String(m).padStart(2, "0");
-    const layer = `nexrad-n0q-m${mm}m-900913`;
-    frames.push({
-      id: layer,
-      label: `${mm} min ago`,
-      minutesAgo: m,
-      urlTemplate: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${layer}/{z}/{x}/{y}.png`
+  // ========== SOFT REFRESH ==========
+  function startRefreshCycle() {
+    nextRefreshAt = Date.now() + REFRESH_MS;
+    clearInterval(refreshTimer);
+    clearInterval(countdownTimer);
+    refreshTimer = setInterval(softRefresh, REFRESH_MS);
+    countdownTimer = setInterval(updateCountdown, 1000);
+    updateCountdown();
+  }
+
+  function updateCountdown() {
+    const left = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+    const m = String(Math.floor(left / 60)).padStart(1, "0");
+    const s = String(left % 60).padStart(2, "0");
+    $("#nextRefresh").textContent = `${m}:${s}`;
+  }
+
+  async function softRefresh() {
+    nextRefreshAt = Date.now() + REFRESH_MS;
+    playChime();
+    await Promise.all([
+      refreshAllWatches(),
+      loadNwsAlerts(),
+      loadBuoys(),
+    ]);
+    // re-mark fresh
+    stations.forEach(s => { s._fresh = false; });
+    toast("Data refreshed", 1600);
+  }
+
+  // ========== SPLITTERS & COLLAPSE ==========
+  function initSplitters() {
+    const root = document.documentElement;
+    $$(".splitter").forEach(sp => {
+      let dragging = false;
+      sp.addEventListener("mousedown", e => {
+        e.preventDefault();
+        dragging = true;
+        sp.classList.add("dragging");
+        const which = sp.dataset.split;
+        const onMove = ev => {
+          if (!dragging) return;
+          const grid = $("#mainGrid");
+          const rect = grid.getBoundingClientRect();
+          if (which === "left") {
+            const w = Math.min(400, Math.max(180, ev.clientX - rect.left));
+            root.style.setProperty("--left-w", w + "px");
+          } else {
+            const w = Math.min(420, Math.max(200, rect.right - ev.clientX));
+            root.style.setProperty("--right-w", w + "px");
+          }
+          if (map) map.invalidateSize();
+        };
+        const onUp = () => {
+          dragging = false;
+          sp.classList.remove("dragging");
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          saveLayoutLocal();
+          if (map) map.invalidateSize();
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
     });
   }
-  frames.push({
-    id: "nexrad-n0q-900913",
-    label: "current",
-    minutesAgo: 0,
-    urlTemplate: "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png"
-  });
-  return frames;
-}
 
-async function fetchRadarFrames() {
-  const src = radarPlayer.source || "iem";
-
-  if (src === "iem") {
-    radarPlayer.frames = buildIemFrames();
-    radarPlayer.index = radarPlayer.frames.length - 1;
-    return radarPlayer.frames.length;
-  }
-
-  if (src === "nowcoast") {
-    radarPlayer.frames = [{
-      id: "nowcoast",
-      label: "nowCOAST live",
-      minutesAgo: 0,
-      wms: true
-    }];
-    radarPlayer.index = 0;
-    return 1;
-  }
-
-  // RainViewer fallback
-  const res = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" });
-  if (!res.ok) throw new Error("RainViewer HTTP " + res.status);
-  const data = await res.json();
-  radarPlayer.host = (data.host || radarPlayer.host).replace(/\/$/, "");
-  const past = Array.isArray(data.radar?.past) ? data.radar.past : [];
-  radarPlayer.frames = past.filter(f => f && f.path && f.time).map(f => ({
-    id: f.path,
-    label: new Date(f.time * 1000).toISOString().substr(11, 5) + "Z",
-    time: f.time,
-    path: f.path,
-    urlTemplate: `${radarPlayer.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`
-  }));
-  radarPlayer.index = Math.max(0, radarPlayer.frames.length - 1);
-  return radarPlayer.frames.length;
-}
-
-function destroyRadarLayer() {
-  if (radarPlayer.layer) {
-    try { map.removeLayer(radarPlayer.layer); } catch (_) {}
-    radarPlayer.layer = null;
-  }
-  if (ncLayerState.radar && ncLayerState.radar !== radarPlayer.layer) {
-    try { map.removeLayer(ncLayerState.radar); } catch (_) {}
-  }
-  ncLayerState.radar = null;
-}
-
-function ensureRadarLayerForFrame(frame) {
-  if (!map || !frame) return null;
-
-  // nowCOAST WMS — single static mosaic
-  if (frame.wms) {
-    if (radarPlayer.layer && radarPlayer.layer._isWms) {
-      return radarPlayer.layer;
-    }
-    destroyRadarLayer();
-    const wms = L.tileLayer.wms("https://nowcoast.noaa.gov/geoserver/weather_radar/wms", {
-      layers: "base_reflectivity_mosaic",
-      format: "image/png",
-      transparent: true,
-      version: "1.1.1",
-      opacity: radarPlayer.opacity,
-      zIndex: 450,
-      uppercase: true,
-      attribution: "NOAA nowCOAST NEXRAD"
+  function initPanels() {
+    $$(".panel-head").forEach(head => {
+      head.addEventListener("click", e => {
+        if (e.target.closest("button, a, input, select")) return;
+        head.closest(".panel")?.classList.toggle("collapsed");
+        saveLayoutLocal();
+      });
     });
-    wms._isWms = true;
-    wms.addTo(map);
-    radarPlayer.layer = wms;
-    ncLayerState.radar = wms;
-    return wms;
   }
 
-  const url = frame.urlTemplate;
-  if (!url) return null;
+  // ========== CLOCK & UI BINDINGS ==========
+  function initClock() {
+    const tick = () => { $("#utcClock").textContent = utcNow(); };
+    tick();
+    setInterval(tick, 1000);
+  }
 
-  // Reuse one XYZ layer; only setUrl between frames
-  if (radarPlayer.layer && !radarPlayer.layer._isWms && map.hasLayer(radarPlayer.layer)) {
-    try {
-      if (typeof radarPlayer.layer.setUrl === "function") {
-        radarPlayer.layer.setUrl(url, false);
-      } else {
-        radarPlayer.layer._url = url;
-        radarPlayer.layer.redraw();
+  function initUI() {
+    $("#softRefreshBtn").onclick = () => softRefresh();
+    $("#resetFilters").onclick = () => {
+      $("#stateFilter").value = "";
+      $("#typeFilter").value = "";
+      $("#productFilter").value = "none";
+      $("#showWaterLevels").checked = true;
+      $("#showCurrents").checked = true;
+      $("#showPorts").checked = false;
+      $("#showWarnings").checked = false;
+      $("#showBuoys").checked = true;
+      applyFilters();
+    };
+    ["stateFilter", "typeFilter", "productFilter"].forEach(id => {
+      $(`#${id}`).addEventListener("change", applyFilters);
+    });
+    ["showWaterLevels", "showCurrents", "showPorts", "showWarnings", "showBuoys"].forEach(id => {
+      $(`#${id}`).addEventListener("change", () => {
+        if (id === "showWarnings") drawAlertZones();
+        applyFilters();
+      });
+    });
+    $("#searchInput").addEventListener("input", () => {
+      clearTimeout($("#searchInput")._t);
+      $("#searchInput")._t = setTimeout(applyFilters, 200);
+    });
+    $("#basemapChips").addEventListener("click", e => {
+      const chip = e.target.closest(".chip");
+      if (chip) setBasemap(chip.dataset.bm);
+    });
+    $("#refreshWarningsBtn").onclick = () => loadNwsAlerts();
+    $("#clearWatches").onclick = () => { watched = []; renderWatches(); saveLayoutLocal(); };
+
+    // layout modal
+    $("#layoutBtn").onclick = () => $("#layoutModal").classList.remove("hidden");
+    $("#closeLayoutModal").onclick = () => $("#layoutModal").classList.add("hidden");
+    $("#layoutModal").addEventListener("click", e => {
+      if (e.target === $("#layoutModal")) $("#layoutModal").classList.add("hidden");
+    });
+    $("#exportLayoutBtn").onclick = exportLayout;
+    $("#importLayoutFile").onchange = e => {
+      const f = e.target.files?.[0];
+      if (f) importLayoutFile(f);
+    };
+    $("#resetLayoutBtn").onclick = () => {
+      localStorage.removeItem("tcx_layout_v2");
+      location.reload();
+    };
+    $("#loadLayoutUrlBtn").onclick = () => {
+      const u = $("#layoutUrlInput").value.trim();
+      if (u) loadLayoutFromUrl(u);
+    };
+
+    $("#soundToggle").onclick = () => {
+      soundEnabled = !soundEnabled;
+      localStorage.setItem("tcx_sound", soundEnabled ? "1" : "0");
+      $("#soundToggle").classList.toggle("active", soundEnabled);
+      $("#soundToggle").textContent = soundEnabled ? "Sound" : "Muted";
+      toast(soundEnabled ? "Sound on" : "Sound muted");
+    };
+    $("#soundToggle").classList.toggle("active", soundEnabled);
+
+    // keyboard
+    document.addEventListener("keydown", e => {
+      if (e.target.matches("input, select, textarea")) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        $("#searchInput").focus();
       }
-    } catch (e) {
-      console.warn("radar setUrl", e);
-    }
-    return radarPlayer.layer;
-  }
-
-  destroyRadarLayer();
-  const layer = L.tileLayer(url, {
-    opacity: radarPlayer.opacity,
-    zIndex: 450,
-    // Show at continental + local zooms; scale tiles past native
-    minZoom: 1,
-    maxZoom: 18,
-    maxNativeZoom: 7,
-    tileSize: 256,
-    zoomOffset: 0,
-    updateWhenIdle: true,
-    updateWhenZooming: false,
-    keepBuffer: 1,
-    className: "radar-tiles",
-    crossOrigin: true,
-    attribution: radarPlayer.source === "iem"
-      ? "Iowa Environmental Mesonet · NEXRAD N0Q"
-      : "RainViewer · NEXRAD",
-    errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-  });
-  layer.addTo(map);
-  radarPlayer.layer = layer;
-  ncLayerState.radar = layer;
-  return layer;
-}
-
-function updateRadarLabels() {
-  const frame = radarPlayer.frames[radarPlayer.index];
-  if (!frame) return;
-  let timeText = frame.label || "—";
-  if (frame.time) {
-    const t = new Date(frame.time * 1000);
-    if (!isNaN(t.getTime())) timeText = t.toISOString().replace("T", " ").substring(0, 19) + "Z";
-  } else if (frame.minutesAgo != null) {
-    timeText = frame.minutesAgo === 0 ? "CURRENT" : `${frame.minutesAgo} MIN AGO`;
-  }
-  const fl = document.getElementById("radarFrameLabel");
-  const tl = document.getElementById("radarTimeLabel");
-  const hud = document.getElementById("radarHudTime");
-  if (fl) fl.textContent = `FRAME ${radarPlayer.index + 1}/${radarPlayer.frames.length}`;
-  if (tl) tl.textContent = timeText;
-  if (hud) hud.textContent = `RADAR ${timeText}`;
-}
-
-function showRadarFrame(i) {
-  if (!map || !radarPlayer.enabled || !radarPlayer.frames.length) return;
-  const n = radarPlayer.frames.length;
-  radarPlayer.index = ((i % n) + n) % n;
-  const frame = radarPlayer.frames[radarPlayer.index];
-  ensureRadarLayerForFrame(frame);
-  updateRadarLabels();
-}
-
-function radarPlayIntervalMs() {
-  const s = Math.max(1, Math.min(8, radarPlayer.speed || 3));
-  return Math.round(1600 - (s - 1) * (1100 / 7));
-}
-
-function stopRadarPlayback() {
-  radarPlayer.playing = false;
-  if (radarPlayer.timer) {
-    clearInterval(radarPlayer.timer);
-    radarPlayer.timer = null;
-  }
-  const pb = document.getElementById("radarPlayBtn");
-  if (pb) {
-    pb.textContent = "▶";
-    pb.classList.remove("active");
-  }
-  const hb = document.getElementById("radarHudPlay");
-  if (hb) hb.textContent = "▶";
-}
-
-function startRadarPlayback() {
-  if (!radarPlayer.enabled || radarPlayer.frames.length < 2) return;
-  stopRadarPlayback();
-  radarPlayer.playing = true;
-  const pb = document.getElementById("radarPlayBtn");
-  if (pb) {
-    pb.textContent = "❚❚";
-    pb.classList.add("active");
-  }
-  const hb = document.getElementById("radarHudPlay");
-  if (hb) hb.textContent = "❚❚";
-  radarPlayer.timer = setInterval(() => {
-    if (!radarPlayer.enabled || !map) {
-      stopRadarPlayback();
-      return;
-    }
-    if (radarPlayer.layer && !map.hasLayer(radarPlayer.layer)) {
-      try { radarPlayer.layer.addTo(map); } catch (_) {}
-    }
-    showRadarFrame(radarPlayer.index + 1);
-  }, radarPlayIntervalMs());
-}
-
-function toggleRadarPlayback() {
-  if (!radarPlayer.enabled) return;
-  if (radarPlayer.playing) stopRadarPlayback();
-  else startRadarPlayback();
-}
-
-async function enableRadarLayer() {
-  radarPlayer.enabled = true;
-  document.getElementById("radarControls")?.classList.remove("hidden");
-  document.getElementById("radarHud")?.classList.remove("hidden");
-  // Sync source dropdown if present
-  const sel = document.getElementById("radarSource");
-  if (sel) radarPlayer.source = sel.value || "iem";
-
-  try {
-    const n = await fetchRadarFrames();
-    if (!n) throw new Error("no frames");
-    // Show current frame immediately; user hits play for loop (faster, NOAA-like)
-    showRadarFrame(radarPlayer.frames.length - 1);
-    const name = radarPlayer.source === "iem" ? "IEM NEXRAD" :
-      radarPlayer.source === "nowcoast" ? "nowCOAST WMS" : "RainViewer";
-    showToast(`Radar ON — ${name} · press ▶ to animate`);
-  } catch (e) {
-    console.warn("radar enable", e);
-    // Hard fallback: IEM current only
-    try {
-      radarPlayer.source = "iem";
-      radarPlayer.frames = buildIemFrames();
-      showRadarFrame(radarPlayer.frames.length - 1);
-      showToast("Radar ON — IEM NEXRAD · press ▶ to animate");
-    } catch (e2) {
-      showToast("Radar load failed");
-      radarPlayer.enabled = false;
-    }
-  }
-}
-
-function disableRadarLayer() {
-  radarPlayer.enabled = false;
-  stopRadarPlayback();
-  destroyRadarLayer();
-  document.getElementById("radarControls")?.classList.add("hidden");
-  document.getElementById("radarHud")?.classList.add("hidden");
-}
-
-function bindRadarControls() {
-  if (bindRadarControls._done) return;
-  bindRadarControls._done = true;
-  document.getElementById("radarPlayBtn")?.addEventListener("click", toggleRadarPlayback);
-  document.getElementById("radarHudPlay")?.addEventListener("click", toggleRadarPlayback);
-  document.getElementById("radarPrevBtn")?.addEventListener("click", () => {
-    if (!radarPlayer.enabled) return;
-    stopRadarPlayback();
-    showRadarFrame(radarPlayer.index - 1);
-  });
-  document.getElementById("radarNextBtn")?.addEventListener("click", () => {
-    if (!radarPlayer.enabled) return;
-    stopRadarPlayback();
-    showRadarFrame(radarPlayer.index + 1);
-  });
-  document.getElementById("radarRefreshBtn")?.addEventListener("click", async () => {
-    if (!radarPlayer.enabled) return;
-    const wasPlaying = radarPlayer.playing;
-    stopRadarPlayback();
-    // Bust tile cache by recreating layer
-    destroyRadarLayer();
-    await fetchRadarFrames();
-    showRadarFrame(radarPlayer.frames.length - 1);
-    if (wasPlaying && radarPlayer.frames.length > 1) startRadarPlayback();
-    showToast("Radar refreshed");
-  });
-  document.getElementById("radarSpeed")?.addEventListener("input", (e) => {
-    radarPlayer.speed = parseInt(e.target.value, 10) || 3;
-    if (radarPlayer.playing) startRadarPlayback();
-  });
-  document.getElementById("radarOpacity")?.addEventListener("input", (e) => {
-    radarPlayer.opacity = (parseInt(e.target.value, 10) || 75) / 100;
-    if (radarPlayer.layer?.setOpacity) radarPlayer.layer.setOpacity(radarPlayer.opacity);
-  });
-  document.getElementById("radarSource")?.addEventListener("change", async (e) => {
-    if (!radarPlayer.enabled) {
-      radarPlayer.source = e.target.value;
-      return;
-    }
-    stopRadarPlayback();
-    destroyRadarLayer();
-    radarPlayer.source = e.target.value;
-    await fetchRadarFrames();
-    showRadarFrame(radarPlayer.frames.length - 1);
-    if (radarPlayer.frames.length > 1) startRadarPlayback();
-    showToast("Radar source: " + radarPlayer.source.toUpperCase());
-  });
-}
-
-async function initRainViewer() {
-  bindRadarControls();
-  radarPlayer.source = "iem";
-  try { await fetchRadarFrames(); } catch (_) {}
-}
-
-function openLayerDetail(title, html) {
-  const modal = document.getElementById("alertModal");
-  if (!modal) {
-    showToast(title);
-    return;
-  }
-  document.getElementById("alertModalEvent").textContent = title;
-  document.getElementById("alertModalSeverity").textContent = "LAYER DETAIL";
-  document.getElementById("alertModalArea").textContent = "";
-  document.getElementById("alertModalHeadline").textContent = "";
-  document.getElementById("alertModalDesc").textContent = "";
-  document.getElementById("alertModalInstr").innerHTML = html;
-  document.getElementById("alertModalMeta").textContent = "";
-  modal.classList.remove("hidden");
-}
-
-function gaugeStatusColor(status) {
-  const s = (status || "").toLowerCase();
-  if (s.includes("major")) return "#c0392b";
-  if (s.includes("moderate")) return "#e67e22";
-  if (s.includes("flood") || s.includes("minor")) return "#f1c40f";
-  if (s.includes("action")) return "#3498db";
-  return "#27ae60";
-}
-
-function bindRiverGaugePopups(layer) {
-  layer.on("click", (e) => {
-    const f = e.layer?.feature || e.propagatedFrom?.feature;
-    const p = f?.properties || e.layer?.feature?.properties;
-    // esri featureLayer click
-  });
-  if (layer.bindPopup) {
-    layer.bindPopup((layer) => {
-      const p = layer.feature?.properties || {};
-      const status = p.status || p.flood || "unknown";
-      const color = gaugeStatusColor(status);
-      const obs = p.observed != null ? p.observed : "—";
-      const units = p.units || "ft";
-      const name = p.location || p.gaugelid || "River Gauge";
-      const waterbody = p.waterbody || "";
-      const time = p.obstime || "";
-      const action = p.action != null ? p.action : "—";
-      const flood = p.flood != null ? p.flood : "—";
-      const mod = p.moderate != null ? p.moderate : "—";
-      const maj = p.major != null ? p.major : "—";
-      const url = p.url || "";
-      return `<div style="min-width:220px;font-family:monospace;font-size:11px">
-        <strong style="color:#e67e22">${name}</strong><br/>
-        <span style="color:${color}">● ${status}</span><br/>
-        ${waterbody}<br/>
-        <hr style="border-color:#333"/>
-        Observed: <b>${obs} ${units}</b><br/>
-        Time: ${time}<br/>
-        Action: ${action} · Flood: ${flood}<br/>
-        Moderate: ${mod} · Major: ${maj}<br/>
-        Gauge: ${p.gaugelid || ""} · ${p.state || ""} ${p.wfo || ""}<br/>
-        ${url ? `<a href="${url}" target="_blank" style="color:#e67e22">Hydrograph / AHPS ↗</a>` : ""}
-      </div>`;
+      if (e.key === "Escape") {
+        const keys = [...floatWindows.keys()];
+        if (keys.length) closeFloat(keys[keys.length - 1]);
+        else $("#layoutModal").classList.add("hidden");
+      }
+      if (e.key === "r" || e.key === "R") softRefresh();
     });
   }
-}
 
-async function wmsIdentify(latlng, layerName) {
-  if (!map || !layerName) return null;
-  const size = map.getSize();
-  const bounds = map.getBounds();
-  const sw = bounds.getSouthWest();
-  const ne = bounds.getNorthEast();
-  // Project to 3857-ish bbox for WMS 1.1.1 with EPSG:3857 is complex; use 4326
-  const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
-  const point = map.latLngToContainerPoint(latlng);
-  const url = `${NC_WMS}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&LAYERS=${encodeURIComponent(layerName)}&QUERY_LAYERS=${encodeURIComponent(layerName)}&STYLES=&SRS=EPSG:4326&BBOX=${bbox}&WIDTH=${size.x}&HEIGHT=${size.y}&X=${Math.round(point.x)}&Y=${Math.round(point.y)}&INFO_FORMAT=application/json&FEATURE_COUNT=5`;
-  try {
-    const res = await fetch(url);
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("json")) {
-      const json = await res.json();
-      return json;
-    }
-    const text = await res.text();
-    return { raw: text.slice(0, 2000) };
-  } catch (e) {
-    return null;
-  }
-}
+  // ========== BOOT ==========
+  async function boot() {
+    initMap();
+    initSplitters();
+    initPanels();
+    initClock();
+    initUI();
+    initNowCoast();
 
-function bindNcIdentify() {
-  if (ncIdentifyBound || !map) return;
-  ncIdentifyBound = true;
-  map.on("click", async (e) => {
-    // Find first active WMS layer to identify
-    const active = Object.entries(ncLayerState).filter(([k, v]) => v && NC_WMS_MAP[k]);
-    if (!active.length) return;
-    // Prefer bluetopo / waterlevels / radar for identify
-    const prefer = ["bluetopo", "waterlevels_nc", "vlm", "sfc_currents", "sst_nc", "radar"];
-    let key = prefer.find(k => ncLayerState[k]) || active[0][0];
-    const layerName = NC_WMS_MAP[key];
-    if (!layerName) return;
-    const info = await wmsIdentify(e.latlng, layerName);
-    if (!info) return;
-    let html = "";
-    if (info.features && info.features.length) {
-      html = info.features.map(f => {
-        const props = f.properties || {};
-        return Object.entries(props).map(([k, v]) => `<b>${k}</b>: ${v}`).join("<br/>");
-      }).join("<hr/>");
-    } else if (info.raw) {
-      html = `<pre style="white-space:pre-wrap;font-size:10px">${info.raw}</pre>`;
+    // URL layout param
+    const params = new URLSearchParams(location.search);
+    const layoutUrl = params.get("layout");
+    if (layoutUrl) {
+      await loadLayoutFromUrl(layoutUrl);
     } else {
-      return; // nothing
+      loadLayoutLocal();
     }
-    L.popup({ maxWidth: 320 })
-      .setLatLng(e.latlng)
-      .setContent(`<div style="font-size:11px"><strong>${key}</strong><br/>${html}</div>`)
-      .openOn(map);
-  });
-}
 
-function toggleNcLayer(key, on) {
-  if (!map) return;
-
-  if (key === "radar") {
-    if (on) enableRadarLayer();
-    else {
-      disableRadarLayer();
-      showToast("Radar OFF");
-    }
-    return;
+    await loadStations();
+    await Promise.all([loadBuoys(), loadNwsAlerts()]);
+    startRefreshCycle();
   }
 
-  if (key === "alerts") {
-    showWarnings = on;
-    document.getElementById("toggleWarnings")?.classList.toggle("active", on);
-    renderNwsAlertPolygons();
-    return;
-  }
-
-  removeNc(key);
-  if (!on) {
-    showToast(`${key} OFF`);
-    return;
-  }
-
-  const op = (parseInt(document.getElementById("ncOpacity")?.value || "70", 10)) / 100;
-  bindNcIdentify();
-
-  // Generic nowCOAST WMS
-  if (NC_WMS_MAP[key]) {
-    ncLayerState[key] = makeWmsLayer(NC_WMS_MAP[key], {
-      opacity: op,
-      zIndex: 350 + Object.keys(ncLayerState).length
-    });
-    ncLayerState[key].addTo(map);
-    setTimeout(() => {
-      try { map.invalidateSize(); ncLayerState[key]?.redraw(); } catch (_) {}
-    }, 150);
-    showToast(`${key.replace(/_/g, " ")} ON — click map for values`);
-    return;
-  }
-
-  if (key === "tropical") {
-    // nowCOAST tropical WMS + NHC MapServer
-    ncLayerState.tropical = makeWmsLayer("tropical_cyclones:active_tropical_cyclones", { opacity: op, zIndex: 420 });
-    ncLayerState.tropical.addTo(map);
-    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      try {
-        const nhc = L.esri.dynamicMapLayer({
-          url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer",
-          opacity: 0.9,
-          f: "image"
-        });
-        nhc.addTo(map);
-        // store secondary on same key via layer group
-        map.removeLayer(ncLayerState.tropical);
-        const g = L.layerGroup([ncLayerState.tropical, nhc]);
-        g.addTo(map);
-        ncLayerState.tropical = g;
-      } catch (_) {}
-    }
-    showToast("Tropical Cyclones ON (empty if no active storms)");
-    return;
-  }
-
-  if (key === "nautical") {
-    // Reliable chart stack (NO MCS/footprints — those drew red misaligned grids):
-    // 1) Esri Ocean base (bathymetry shading)
-    // 2) Esri Ocean reference (depth contours, labels)
-    // 3) OpenSeaMap seamarks (buoys, lights, marks)
-    // 4) BlueTopo WMS for high-res NOAA bathymetry where available
-    const oceanBase = L.tileLayer(
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 16, opacity: 1, attribution: "Esri Ocean", zIndex: 200 }
-    );
-    const oceanRef = L.tileLayer(
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 16, opacity: 0.95, attribution: "Esri Ocean Ref", zIndex: 201 }
-    );
-    const seamark = L.tileLayer(
-      "https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",
-      { maxZoom: 18, minZoom: 7, opacity: 1, attribution: "OpenSeaMap", zIndex: 452 }
-    );
-    const bathy = makeWmsLayer("bluetopo:bathymetry", {
-      opacity: 0.45,
-      zIndex: 320,
-      attribution: "NOAA BlueTopo"
-    });
-    const group = L.layerGroup([oceanBase, oceanRef, bathy, seamark]);
-    group.addTo(map);
-    ncLayerState.nautical = group;
-    // Pull dark basemap down so ocean charts read clearly
-    try {
-      document.querySelectorAll(".basemap-btn").forEach(b => b.classList.remove("active"));
-    } catch (_) {}
-    if (map.getZoom() < 8) map.setZoom(9);
-    try { setBasemap("ocean"); } catch (_) {}
-    showToast("Nautical Charts ON — Ocean depth + seamarks + BlueTopo");
-    return;
-  }
-
-  if (key === "convective") {
-    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      ncLayerState.convective = L.esri.dynamicMapLayer({
-        url: "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer",
-        layers: [0, 1, 8, 9, 16, 17],
-        opacity: op,
-        f: "image"
-      });
-      ncLayerState.convective.addTo(map);
-      showToast("SPC Convective Outlooks ON (Day 1–3)");
-    } else showToast("Convective outlooks unavailable");
-    return;
-  }
-
-  if (key === "river") {
-    if (typeof L.esri !== "undefined" && L.esri.featureLayer) {
-      const fl = L.esri.featureLayer({
-        url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer/0",
-        pointToLayer: (geojson, latlng) => {
-          const st = (geojson.properties?.status || "").toLowerCase();
-          const color = gaugeStatusColor(st);
-          return L.circleMarker(latlng, {
-            radius: 5,
-            color: "#111",
-            weight: 1,
-            fillColor: color,
-            fillOpacity: 0.9
-          });
-        }
-      });
-      fl.on("click", (e) => {
-        const p = e.layer?.feature?.properties || {};
-        if (!p.gaugelid && !p.location) return;
-        openRiverGaugeDetail(p);
-      });
-      fl.addTo(map);
-      ncLayerState.river = fl;
-      showToast("River Gauges ON — click for hydrograph & thresholds");
-    } else showToast("River gauges need Esri Leaflet");
-    return;
-  }
-
-  if (key === "zoneForecast") {
-    if (typeof L.esri !== "undefined" && L.esri.dynamicMapLayer) {
-      ncLayerState.zoneForecast = L.esri.dynamicMapLayer({
-        url: "https://mapservices.weather.noaa.gov/static/rest/services/nws_reference_maps/nws_reference_map/MapServer",
-        layers: [4, 5, 6, 7, 8],
-        opacity: op,
-        f: "image"
-      });
-      ncLayerState.zoneForecast.addTo(map);
-      showToast("Zone Weather Forecasts ON (marine + public zones)");
-    } else showToast("Zone forecasts unavailable");
-    return;
-  }
-
-  if (key === "surface_obs") {
-    showToast("Surface obs: use station markers + Weather Radar for live conditions");
-    return;
-  }
-
-  showToast(`No service mapped for ${key}`);
-}
-
-async function loadTropicalCyclones() {
-  toggleNcLayer("tropical", true);
-}
-
-
-async function openRiverGaugeDetail(p) {
-  const lid = (p.gaugelid || "").trim();
-  const lidLower = lid.toLowerCase();
-  const name = p.location || lid || "River Gauge";
-  const status = p.status || "—";
-  const color = gaugeStatusColor(status);
-  const pageUrl = p.url || (lidLower ? `https://water.noaa.gov/gauges/${lidLower}` : "");
-  const hgImg = lidLower ? `https://water.noaa.gov/resources/hydrographs/${lidLower}_hg.png` : "";
-
-  // Shell UI immediately
-  let html = `
-    <div style="font-size:12px;line-height:1.5;color:var(--text)">
-      <div style="font-size:14px;color:var(--orange);margin-bottom:6px">${name}</div>
-      <div>Water body: ${p.waterbody || "—"} · ${p.state || ""} · WFO ${p.wfo || ""}</div>
-      <div>Status: <b style="color:${color}">${status}</b></div>
-      <div>Observed: <b>${p.observed ?? "—"} ${p.units || "ft"}</b> @ ${p.obstime || ""}</div>
-      <div style="margin:8px 0;padding:8px;background:#0a0d12;border:1px solid var(--panel-border)">
-        <div style="font-size:10px;color:var(--text-muted)">THRESHOLDS (${p.units || "ft"})</div>
-        Action <b>${p.action ?? "—"}</b> · Flood <b>${p.flood ?? "—"}</b> ·
-        Moderate <b>${p.moderate ?? "—"}</b> · Major <b>${p.major ?? "—"}</b>
-      </div>
-      <div id="gaugeChartWrap" style="height:180px;margin:8px 0;background:#0a0d12;border:1px solid var(--panel-border);position:relative">
-        <div class="loading" style="padding:40px;text-align:center">Loading hydrograph…</div>
-      </div>
-      ${hgImg ? `<img id="gaugeHgImg" src="${hgImg}" alt="Hydrograph" style="width:100%;max-height:200px;object-fit:contain;background:#0a0d12;border:1px solid var(--panel-border);margin-bottom:8px" onerror="this.style.display='none'"/>` : ""}
-      ${pageUrl ? `<a href="${pageUrl}" target="_blank" style="color:var(--orange)">Open full gauge page on water.noaa.gov ↗</a>` : ""}
-    </div>`;
-  openLayerDetail(`RIVER GAUGE // ${lid}`, html);
-
-  // Fetch stage time series from NWPS API and chart it
-  if (!lidLower) return;
-  try {
-    const res = await fetch(`https://api.water.noaa.gov/nwps/v1/gauges/${lidLower}/stageflow`);
-    if (!res.ok) throw new Error("NWPS " + res.status);
-    const data = await res.json();
-    const series = data.observed?.data || data.data || [];
-    const pts = series
-      .filter(d => d.primary != null && d.primary > -900)
-      .slice(-120); // last ~points
-    const wrap = document.getElementById("gaugeChartWrap");
-    if (!wrap || !pts.length) {
-      if (wrap) wrap.innerHTML = `<div style="padding:20px;color:var(--text-muted);font-size:11px">No recent stage series — see image/link below</div>`;
-      return;
-    }
-    wrap.innerHTML = `<canvas id="gaugeStageChart"></canvas>`;
-    const ctx = document.getElementById("gaugeStageChart")?.getContext("2d");
-    if (!ctx || typeof Chart === "undefined") return;
-    const action = parseFloat(p.action);
-    const flood = parseFloat(p.flood);
-    new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: pts.map(d => (d.validTime || "").replace("T", " ").slice(5, 16)),
-        datasets: [{
-          label: `Stage (${p.units || "ft"})`,
-          data: pts.map(d => d.primary),
-          borderColor: "#3498db",
-          backgroundColor: "rgba(52,152,219,0.12)",
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.2,
-          fill: true
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          annotation: undefined,
-          title: {
-            display: true,
-            text: `${name} — observed stage`,
-            color: "#e8ecef",
-            font: { size: 11 }
-          }
-        },
-        scales: {
-          x: { ticks: { maxTicksLimit: 6, color: "#5a6a7a", font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
-          y: {
-            ticks: { color: "#5a6a7a", font: { size: 9 } },
-            grid: { color: "rgba(255,255,255,0.06)" },
-            title: { display: true, text: p.units || "ft", color: "#5a6a7a" }
-          }
-        }
-      }
-    });
-  } catch (e) {
-    const wrap = document.getElementById("gaugeChartWrap");
-    if (wrap) wrap.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:11px">Live series unavailable — hydrograph image below if available</div>`;
-  }
-}
-
-
-
-
-// ----- USGS Monitoring Locations (clustered, multi-type) -----
-const USGS_TYPES = {
-  streamflow:   { siteType: "ST", color: "#2ecc71", label: "Streamflow" },
-  surface:      { siteType: "ST", color: "#3498db", label: "Surface-water" },
-  groundwater:  { siteType: "GW", color: "#9b59b6", label: "Groundwater" },
-  springs:      { siteType: "SP", color: "#1abc9c", label: "Springs" },
-  wq:           { siteType: "ES", color: "#e67e22", label: "Water quality" },
-  precip:       { siteType: "AT", color: "#5dade2", label: "Precipitation" },
-  atmos:        { siteType: "AT", color: "#aab7b8", label: "Atmospheric" },
-  cameras:      { siteType: null, color: "#f1c40f", label: "Cameras" }
-};
-const usgsClusters = {}; // type -> MarkerClusterGroup
-const usgsDebouncers = {};
-const usgsLastKeys = {};
-const usgsAborts = {};
-
-function scheduleUsgsType(type) {
-  if (usgsDebouncers[type]) clearTimeout(usgsDebouncers[type]);
-  usgsDebouncers[type] = setTimeout(() => loadUsgsType(type), 280);
-}
-
-function clearUsgsType(type) {
-  if (usgsClusters[type]) {
-    try { map.removeLayer(usgsClusters[type]); } catch (_) {}
-    usgsClusters[type] = null;
-  }
-  usgsLastKeys[type] = "";
-  if (usgsAborts[type]) usgsAborts[type].abort();
-}
-
-async function loadUsgsType(type) {
-  if (!map || !USGS_TYPES[type]) return;
-  const cfg = USGS_TYPES[type];
-
-  // Cameras: no bulk public API — open NWD
-  if (type === "cameras") {
-    clearUsgsType(type);
-    showToast("Cameras: use National Water Dashboard link (no bulk tile API)");
-    window.open("https://dashboard.waterdata.usgs.gov/app/nwd/en/", "_blank");
-    const cb = document.querySelector(`input[data-usgs="cameras"]`);
-    if (cb) cb.checked = false;
-    return;
-  }
-
-  const z = map.getZoom();
-  const b = map.getBounds().pad(0.02);
-  let west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
-
-  // At continental zoom, use CONUS bbox so NWD-style national view works
-  let limit = 800;
-  if (z <= 5) {
-    west = -128; south = 22; east = -65; north = 50;
-    limit = 2000;
-  } else if (z <= 7) {
-    limit = 1500;
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    limit = 1200;
+    boot();
   }
-
-  const key = `${type}:${z <= 5 ? "conus" : [west,south,east,north].map(v=>v.toFixed(2)).join(",")}`;
-  if (key === usgsLastKeys[type] && usgsClusters[type]) return;
-  usgsLastKeys[type] = key;
-
-  if (usgsAborts[type]) usgsAborts[type].abort();
-  usgsAborts[type] = new AbortController();
-
-  const url =
-    `https://api.waterdata.usgs.gov/ogcapi/v0/collections/monitoring-locations/items` +
-    `?f=json&limit=${limit}` +
-    `&bbox=${west.toFixed(3)},${south.toFixed(3)},${east.toFixed(3)},${north.toFixed(3)}` +
-    `&site_type_code=${cfg.siteType}`;
-
-  try {
-    const res = await fetch(url, { signal: usgsAborts[type].signal });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const features = data.features || [];
-
-    clearUsgsType(type);
-    // keep last key after clear
-    usgsLastKeys[type] = key;
-
-    const cluster = L.markerClusterGroup({
-      maxClusterRadius: z <= 6 ? 50 : 40,
-      showCoverageOnHover: false,
-      spiderfyOnMaxZoom: true,
-      disableClusteringAtZoom: 11,
-      iconCreateFunction: (cl) => {
-        const n = cl.getChildCount();
-        const size = n < 20 ? 36 : n < 100 ? 44 : 52;
-        return L.divIcon({
-          html: `<div style="background:${cfg.color};border:2px solid #0a0d12;border-radius:50%;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0a0d12">${n}</div>`,
-          className: "marker-cluster-usgs",
-          iconSize: L.point(size, size)
-        });
-      }
-    });
-
-    features.forEach(f => {
-      const props = f.properties || {};
-      const coords = f.geometry?.coordinates;
-      if (!coords) return;
-      const site_no = String(props.monitoring_location_number || "").replace(/^USGS-/, "");
-      if (!site_no) return;
-      const s = {
-        agency: props.agency_code || "USGS",
-        site_no,
-        name: props.monitoring_location_name || site_no,
-        site_type: props.site_type_code || cfg.siteType,
-        lat: coords[1],
-        lon: coords[0],
-        usgsType: type
-      };
-      const m = L.circleMarker([s.lat, s.lon], {
-        radius: 5,
-        color: "#0a0d12",
-        weight: 1,
-        fillColor: cfg.color,
-        fillOpacity: 0.9
-      });
-      m.bindTooltip(`${cfg.label}: ${s.site_no} — ${s.name}`, { direction: "top" });
-      m.on("click", () => openUsgsGaugeDetail(s));
-      cluster.addLayer(m);
-    });
-
-    cluster.addTo(map);
-    usgsClusters[type] = cluster;
-    showToast(`USGS ${cfg.label}: ${features.length} sites`);
-  } catch (e) {
-    if (e.name === "AbortError") return;
-    console.warn("USGS", type, e);
-    showToast(`USGS ${cfg.label} load failed`);
-  }
-}
-
-function bindUsgsHydroUI() {
-  document.querySelectorAll("input[data-usgs]").forEach(cb => {
-    cb.addEventListener("change", () => {
-      const type = cb.dataset.usgs;
-      if (cb.checked) {
-        scheduleUsgsType(type);
-        // refresh on pan
-        if (!map._usgsMoveBound) {
-          map._usgsMoveBound = true;
-          map.on("moveend", () => {
-            document.querySelectorAll("input[data-usgs]:checked").forEach(c => {
-              if (c.dataset.usgs !== "cameras") scheduleUsgsType(c.dataset.usgs);
-            });
-          });
-        }
-      } else {
-        clearUsgsType(type);
-      }
-    });
-  });
-}
-
-
-async function openUsgsGaugeDetail(s) {
-  const siteNo = s.site_no;
-  const mlId = `USGS-${siteNo}`;
-  const statsUrl = `https://waterdata.usgs.gov/monitoring-location/${mlId}/statistical-graphs`;
-  const locUrl = `https://waterdata.usgs.gov/monitoring-location/${mlId}/#parameterCode=00065&period=P7D`;
-  const gwisUrl = `https://dashboard.waterdata.usgs.gov/api/gwis/2.1.1/service/site?sitenumber=${siteNo}&period=p7d&pad=false`;
-  const nwdUrl = `https://dashboard.waterdata.usgs.gov/app/nwd/en/?site_no=${siteNo}`;
-
-  let html = `
-    <div style="font-size:12px;line-height:1.45;color:var(--text)">
-      <div style="font-size:14px;color:#1abc9c;margin-bottom:4px">${s.name || siteNo}</div>
-      <div style="color:var(--text-muted)">USGS ${siteNo} · ${s.site_type || "ST"} · ${s.lat.toFixed(4)}, ${s.lon.toFixed(4)}</div>
-      <div id="usgsIvStats" style="margin:10px 0;padding:8px;background:#0a0d12;border:1px solid var(--panel-border)">Loading latest values…</div>
-      <div style="margin:8px 0;height:280px;border:1px solid var(--panel-border);background:#0a0d12">
-        <iframe src="${gwisUrl}" style="width:100%;height:100%;border:0;background:#fff" title="USGS hydrograph"></iframe>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
-        <a href="${statsUrl}" target="_blank" rel="noopener" style="color:var(--orange)">Statistical graphs ↗</a>
-        <a href="${locUrl}" target="_blank" rel="noopener" style="color:var(--orange)">Monitoring location ↗</a>
-        <a href="${nwdUrl}" target="_blank" rel="noopener" style="color:var(--orange)">National Water Dashboard ↗</a>
-      </div>
-    </div>`;
-  openLayerDetail(`USGS // ${siteNo}`, html);
-
-  // Fetch latest stage + discharge
-  try {
-    const ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&parameterCd=00060,00065,00010&siteStatus=all`;
-    const res = await fetch(ivUrl);
-    const data = await res.json();
-    const series = data?.value?.timeSeries || [];
-    const bits = series.map(ts => {
-      const p = ts.variable?.variableName || ts.variable?.variableCode?.[0]?.value || "param";
-      const unit = ts.variable?.unit?.unitCode || "";
-      const vals = ts.values?.[0]?.value || [];
-      const last = vals[vals.length - 1];
-      if (!last) return null;
-      return `<div><b>${p}</b>: ${last.value} ${unit} <span style="color:var(--text-muted)">@ ${last.dateTime}</span></div>`;
-    }).filter(Boolean);
-    const el = document.getElementById("usgsIvStats");
-    if (el) el.innerHTML = bits.length ? bits.join("") : "No recent instantaneous values";
-  } catch (e) {
-    const el = document.getElementById("usgsIvStats");
-    if (el) el.textContent = "Could not load instantaneous values";
-  }
-}
-
-
-function bindNowcoastUI() {
-  if (typeof bindUsgsHydroUI === 'function') bindUsgsHydroUI();
-
-  document.querySelectorAll("input[data-nc]").forEach(cb => {
-    cb.addEventListener("change", () => toggleNcLayer(cb.dataset.nc, cb.checked));
-  });
-  document.getElementById("ncOpacity")?.addEventListener("input", (e) => {
-    setNcOpacity(parseInt(e.target.value, 10));
-  });
-  document.getElementById("closeAlertModal")?.addEventListener("click", closeAlertModal);
-  document.getElementById("alertModal")?.addEventListener("click", (e) => {
-    if (e.target.id === "alertModal") closeAlertModal();
-  });
-  const alertsCb = document.querySelector('#nowcoastLayers input[data-nc="alerts"]');
-  if (alertsCb) alertsCb.checked = !!showWarnings;
-  initRainViewer();
-}
+})();

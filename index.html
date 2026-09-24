@@ -2,377 +2,314 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="TIDES & CURRENTS XPLR — elite NOAA tides, currents and coastal intelligence dashboard with floating metadata windows." />
+  <meta name="theme-color" content="#0a0e14" />
   <title>TIDES &amp; CURRENTS XPLR</title>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="styles.css" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <div id="app">
-    <header class="top-bar">
-      <div class="logo-section">
-        <button type="button" class="logo-mark" id="logoRefreshBtn" title="Soft refresh">
-          <span class="radar-face" aria-hidden="true">
+  <div id="app" class="app">
+    <!-- ========== TOP COMMAND BAR ========== -->
+    <header class="cmd-bar" role="banner">
+      <div class="cmd-left">
+        <button type="button" id="softRefreshBtn" class="logo-btn" title="Soft refresh (R)">
+          <span class="logo-mark" aria-hidden="true">
             <span class="radar-ring"></span>
-            <span class="radar-ring radar-ring-2"></span>
+            <span class="radar-ring r2"></span>
             <span class="radar-sweep"></span>
-            <span class="radar-dot"></span>
+            <span class="radar-core"></span>
           </span>
         </button>
-        <div class="logo-text">
-          <span class="title">TIDES &amp; CURRENTS</span>
-          <span class="subtitle">XPLR // NOAA CO-OPS</span>
+        <div class="brand">
+          <span class="brand-title">TIDES &amp; CURRENTS</span>
+          <span class="brand-sub">XPLR · NOAA CO-OPS</span>
         </div>
       </div>
-      <div class="search-section">
-        <input type="text" id="searchInput" placeholder="SEARCH STATION / STATE / ID..." autocomplete="off" />
-        <button type="button" id="searchBtn" title="Search">⌕</button>
+
+      <div class="cmd-search">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" id="searchInput" placeholder="Search station, ID, state…" autocomplete="off" spellcheck="false" />
+        <kbd class="kbd">/</kbd>
       </div>
-      <div class="status-section">
-        <div class="status-item status-badge-wrap">
-          <span class="label">STATIONS</span>
-          <span class="value-row">
-            <span class="value" id="stationCount">--</span>
-            <span class="count-badge" id="stationBadge" title="Loaded stations">0</span>
-          </span>
+
+      <div class="cmd-status">
+        <div class="stat" title="Active CO-OPS stations">
+          <span class="stat-label">Stations</span>
+          <span class="stat-value" id="stationCount">—</span>
         </div>
-        <div class="status-item status-badge-wrap">
-          <span class="label">BUOYS</span>
-          <span class="value-row">
-            <span class="value" id="buoyCount">--</span>
-            <span class="count-badge badge-cyan" id="buoyBadge" title="Active buoys">0</span>
-          </span>
+        <div class="stat" title="NDBC buoys">
+          <span class="stat-label">Buoys</span>
+          <span class="stat-value" id="buoyCount">—</span>
         </div>
-        <div class="status-item"><span class="label">UTC</span><span class="value" id="utcClock">--:--:--</span></div>
-        <div class="status-item"><button type="button" id="soundToggle" class="sound-btn" title="Toggle SOL chime">🔊 SOUND ON</button></div>
-        <div class="status-item live"><span class="pulse"></span><span class="label">LIVE</span></div>
+        <div class="stat">
+          <span class="stat-label">UTC</span>
+          <span class="stat-value mono" id="utcClock">--:--:--</span>
+        </div>
+        <div class="stat live-pill">
+          <span class="pulse-dot"></span>
+          <span>LIVE</span>
+          <span class="refresh-hint mono" id="nextRefresh">2:00</span>
+        </div>
+        <button type="button" id="layoutBtn" class="ghost-btn" title="Save / load layout">Layout</button>
+        <button type="button" id="soundToggle" class="ghost-btn" title="Toggle alert chime">Sound</button>
       </div>
     </header>
 
-    <main class="main-grid">
-      <!-- COL 1: Controls -->
-      <aside class="left-panel" id="leftPanel" aria-label="Filters and layers">
-        <section class="panel-section">
-          <div class="section-header">
-            <span class="sec-title">FILTERS</span>
-            <button class="icon-btn" id="resetFilters" title="Reset">↺</button>
-          </div>
-          <div class="filter-group">
-            <label>STATE / REGION</label>
-            <select id="stateFilter">
-              <option value="">ALL STATES</option>
-            </select>
-          </div>
-          <div class="filter-group">
-            <label>DATA TYPE</label>
-            <select id="typeFilter">
-              <option value="">ALL TYPES</option>
-              <option value="waterlevels">WATER LEVELS</option>
-              <option value="currents">CURRENTS</option>
-              <option value="met">METEOROLOGICAL</option>
-              <option value="ports">PORTS®</option>
-            </select>
-          </div>
-          <div class="filter-group">
-            <label>PRODUCT OVERLAY (COLORS PINS)</label>
-            <select id="productFilter">
-              <option value="none">NONE</option>
-              <option value="all">SHOW ALL OVERLAYS</option>
-              <option value="water_level">WATER LEVEL (MLLW)</option>
-              <option value="air_temperature">AIR TEMPERATURE</option>
-              <option value="water_temperature">WATER TEMPERATURE</option>
-              <option value="air_pressure">BAROMETRIC PRESSURE</option>
-              <option value="wind">WINDS</option>
-              <option value="humidity">RELATIVE HUMIDITY</option>
-              <option value="visibility">VISIBILITY</option>
-              <option value="air_gap">AIR GAP</option>
-              <option value="currents">CURRENTS</option>
-              <option value="predictions">TIDE PREDICTIONS</option>
-            </select>
-          </div>
-          <div class="filter-group checkbox-group">
-            <label class="check-row"><input type="checkbox" id="showWaterLevels" checked /><span>WATER LEVELS</span></label>
-            <label class="check-row"><input type="checkbox" id="showCurrents" checked /><span>CURRENTS</span></label>
-            <label class="check-row"><input type="checkbox" id="showPorts" /><span>PORTS® ONLY</span></label>
-            <label class="check-row"><input type="checkbox" id="showWarnings" /><span>WARNINGS / THRESHOLDS</span></label>
-          </div>
-        </section>
-        <section class="panel-section legend-section">
-          <div class="section-header">
-            <span class="sec-title">LEGEND // DATA</span>
-          </div>
-          <ul class="legend-list" id="legendList">
-            <li><span class="swatch none"></span> NONE</li>
-            <li><span class="swatch wl"></span> WATER LEVEL (MLLW)</li>
-            <li><span class="swatch at"></span> AIR TEMPERATURE</li>
-            <li><span class="swatch wt"></span> WATER TEMPERATURE</li>
-            <li><span class="swatch bp"></span> BAROMETRIC PRESSURE</li>
-            <li><span class="swatch wind"></span> WINDS</li>
-            <li><span class="swatch rh"></span> RELATIVE HUMIDITY</li>
-            <li><span class="swatch vis"></span> VISIBILITY</li>
-            <li><span class="swatch chart"></span> NAUTICAL CHARTS</li>
-            <li><span class="swatch hybrid"></span> IMAGERY / HYBRID / STREETS / TOPO</li>
-            <li><span class="swatch wlmet"></span> WATER LEVEL + MET</li>
-            <li><span class="swatch wlon"></span> WATER LEVELS</li>
-            <li><span class="swatch met"></span> METEOROLOGICAL</li>
-            <li><span class="swatch airgap"></span> AIR GAP</li>
-            <li><span class="swatch curr"></span> CURRENTS</li>
-            <li><span class="swatch buoy"></span> NDBC BUOYS</li>
-            <li><span class="swatch pulse-demo"></span> FRESH DATA (PULSING)</li>
-            <li><span class="swatch waves"></span> WAVE HEIGHT / PERIOD</li>
-            <li><span class="swatch tidepred"></span> TIDE PREDICTION STATIONS</li>
-            <li><span class="swatch flood"></span> COASTAL FLOOD RISK</li>
-          </ul>
-        </section>
-        <section class="panel-section">
-          <div class="section-header">
-            <span class="sec-title">BASEMAP</span>
-          </div>
-          <div class="basemap-btns">
-            <button class="bm-btn active" data-bm="dark">DARK</button>
-            <button class="bm-btn" data-bm="imagery">IMAGERY</button>
-            <button class="bm-btn" data-bm="topo">TOPO</button>
-            <button class="bm-btn" data-bm="streets">STREETS</button>
-            <button class="bm-btn" data-bm="ocean">OCEAN</button>
-          </div>
-        </section>
-        <section class="panel-section warnings-section" id="warningsSection">
-          <div class="sec-title">NWS // COASTAL FLOOD ALERTS
-            <button id="refreshWarningsBtn" class="mini-btn" title="Refresh alerts">↻</button>
-          </div>
-          <div id="warningsCount" class="warnings-count">Loading…</div>
-          <div id="warningsList" class="warnings-list">
-            <div class="loading">Fetching active coastal flood alerts…</div>
-          </div>
-        </section>
-        <section class="panel-section nowcoast-section">
-          <div class="sec-title">nowCOAST // MAP LAYERS
-            <a href="https://nowcoast.noaa.gov/" target="_blank" class="mini-btn" title="Open nowCOAST">↗</a>
-          </div>
-          <div class="nowcoast-layers" id="nowcoastLayers">
-            <label class="nc-layer"><input type="checkbox" data-nc="alerts_nc" /> Active Alerts</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="bluetopo" /> BlueTopo</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="geopotential" /> Geopotential</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="gridded_wx" /> Gridded Weather Forecasts</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="inland_flood" /> Inland-Coastal Flooding</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="lightning" /> Lightning Detection</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="marine_pathogen" /> Marine Pathogen</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="precip_amt" /> Precipitation Amounts</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="s100" /> S-100 Product Coverages</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="sst_nc" /> Sea Surface Temperature</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="sfc_currents" /> Surface Water Currents</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="tropical_nc" /> Tropical Cyclones</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="vlm" /> Vertical Land Motion</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="waterlevels_nc" /> Water Levels</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="radar" /> Weather Radar (NEXRAD / RainViewer)</label>
-            <div id="radarControls" class="radar-controls hidden">
-              <div class="radar-controls-row">
-                <button type="button" id="radarPlayBtn" title="Play / Pause">▶</button>
-                <button type="button" id="radarPrevBtn" title="Previous frame">‹</button>
-                <button type="button" id="radarNextBtn" title="Next frame">›</button>
-                <button type="button" id="radarRefreshBtn" title="Refresh frames">↻</button>
+    <!-- ========== MAIN GRID ========== -->
+    <main class="main-grid" id="mainGrid">
+      <!-- LEFT RAIL -->
+      <aside class="rail left-rail" id="leftRail" aria-label="Filters and layers">
+        <div class="rail-scroll">
+          <section class="panel" data-panel="filters">
+            <header class="panel-head">
+              <h2>Filters</h2>
+              <button type="button" class="icon-btn" id="resetFilters" title="Reset filters">↺</button>
+            </header>
+            <div class="panel-body">
+              <label class="field">
+                <span>State / Region</span>
+                <select id="stateFilter"><option value="">All states</option></select>
+              </label>
+              <label class="field">
+                <span>Data type</span>
+                <select id="typeFilter">
+                  <option value="">All types</option>
+                  <option value="waterlevels">Water levels</option>
+                  <option value="currents">Currents</option>
+                  <option value="met">Meteorological</option>
+                  <option value="ports">PORTS®</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Product overlay</span>
+                <select id="productFilter">
+                  <option value="none">None</option>
+                  <option value="water_level">Water level (MLLW)</option>
+                  <option value="air_temperature">Air temperature</option>
+                  <option value="water_temperature">Water temperature</option>
+                  <option value="air_pressure">Barometric pressure</option>
+                  <option value="wind">Winds</option>
+                  <option value="humidity">Relative humidity</option>
+                  <option value="visibility">Visibility</option>
+                  <option value="air_gap">Air gap</option>
+                  <option value="currents">Currents</option>
+                  <option value="predictions">Tide predictions</option>
+                </select>
+              </label>
+              <div class="check-grid">
+                <label class="check"><input type="checkbox" id="showWaterLevels" checked /><span>Water levels</span></label>
+                <label class="check"><input type="checkbox" id="showCurrents" checked /><span>Currents</span></label>
+                <label class="check"><input type="checkbox" id="showPorts" /><span>PORTS® only</span></label>
+                <label class="check"><input type="checkbox" id="showWarnings" /><span>NWS alerts on map</span></label>
+                <label class="check"><input type="checkbox" id="showBuoys" checked /><span>NDBC buoys</span></label>
               </div>
-              <div class="radar-controls-row">
-                <label>SOURCE
+            </div>
+          </section>
+
+          <section class="panel" data-panel="basemap">
+            <header class="panel-head"><h2>Basemap</h2></header>
+            <div class="panel-body">
+              <div class="chip-row" id="basemapChips">
+                <button type="button" class="chip active" data-bm="dark">Dark</button>
+                <button type="button" class="chip" data-bm="imagery">Imagery</button>
+                <button type="button" class="chip" data-bm="topo">Topo</button>
+                <button type="button" class="chip" data-bm="streets">Streets</button>
+                <button type="button" class="chip" data-bm="ocean">Ocean</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="layers">
+            <header class="panel-head">
+              <h2>nowCOAST Layers</h2>
+              <a href="https://nowcoast.noaa.gov/" target="_blank" rel="noopener" class="mini-link" title="Open nowCOAST">↗</a>
+            </header>
+            <div class="panel-body">
+              <div class="check-grid compact" id="nowcoastLayers">
+                <label class="check"><input type="checkbox" data-nc="alerts_nc" /><span>Active alerts</span></label>
+                <label class="check"><input type="checkbox" data-nc="waterlevels_nc" /><span>Water levels</span></label>
+                <label class="check"><input type="checkbox" data-nc="sfc_currents" /><span>Surface currents</span></label>
+                <label class="check"><input type="checkbox" data-nc="sst_nc" /><span>Sea surface temp</span></label>
+                <label class="check"><input type="checkbox" data-nc="radar" /><span>Weather radar</span></label>
+                <label class="check"><input type="checkbox" data-nc="satellite" /><span>Satellite</span></label>
+                <label class="check"><input type="checkbox" data-nc="tropical_nc" /><span>Tropical cyclones</span></label>
+                <label class="check"><input type="checkbox" data-nc="lightning" /><span>Lightning</span></label>
+                <label class="check"><input type="checkbox" data-nc="precip_amt" /><span>Precipitation</span></label>
+                <label class="check"><input type="checkbox" data-nc="inland_flood" /><span>Inland flooding</span></label>
+              </div>
+              <div id="radarControls" class="radar-box hidden">
+                <div class="radar-row">
+                  <button type="button" id="radarPlayBtn" class="icon-btn" title="Play/Pause">▶</button>
+                  <button type="button" id="radarPrevBtn" class="icon-btn" title="Prev">‹</button>
+                  <button type="button" id="radarNextBtn" class="icon-btn" title="Next">›</button>
+                  <button type="button" id="radarRefreshBtn" class="icon-btn" title="Refresh">↻</button>
+                </div>
+                <label class="field tight">
+                  <span>Source</span>
                   <select id="radarSource">
-                    <option value="iem" selected>IEM NEXRAD (stable)</option>
-                    <option value="nowcoast">nowCOAST WMS</option>
+                    <option value="iem" selected>IEM NEXRAD</option>
                     <option value="rainviewer">RainViewer</option>
                   </select>
                 </label>
+                <label class="field tight">
+                  <span>Opacity</span>
+                  <input type="range" id="radarOpacity" min="20" max="100" value="70" />
+                </label>
+                <div class="radar-meta mono">
+                  <span id="radarFrameLabel">Frame —</span>
+                  <span id="radarTimeLabel">—</span>
+                </div>
               </div>
-              <div class="radar-controls-row">
-                <label>SPEED <input type="range" id="radarSpeed" min="1" max="8" value="3" /></label>
-              </div>
-              <div class="radar-controls-row">
-                <label>OPACITY <input type="range" id="radarOpacity" min="20" max="100" value="70" /></label>
-              </div>
-              <div class="radar-meta">
-                <span id="radarFrameLabel">FRAME —</span>
-                <span id="radarTimeLabel">—</span>
-              </div>
-              <div class="radar-note">Default: Iowa State IEM NEXRAD mosaic (most reliable). Optional: nowCOAST WMS or RainViewer.</div>
             </div>
-            <label class="nc-layer"><input type="checkbox" data-nc="satellite" /> Weather Satellite</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="nautical" /> Nautical Charts</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="alerts" /> Active Alerts (CO-OPS coastal)</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="convective" /> Convective Outlooks</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="federal" /> Federal Boundaries</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="zoneForecast" /> Zone Weather Forecasts</label>
-            <label class="nc-layer"><input type="checkbox" data-nc="surface_obs" /> Surface Observations</label>
-          </div>
-          <div class="nc-opacity">
-            <span>LAYER OPACITY</span>
-            <input type="range" id="ncOpacity" min="20" max="100" value="70" />
-          </div>
-          <a class="nc-embed-btn" href="https://nowcoast.noaa.gov/" target="_blank" rel="noopener">OPEN FULL nowCOAST MAP ↗</a>
-          <div class="nc-note">Layers load on THIS map via NOAA WMS. nowCOAST cannot be embedded (framing blocked) — use the link for their full viewer. Nautical charts need coastal zoom.</div>
-        </section>
+          </section>
+
+          <section class="panel" data-panel="legend">
+            <header class="panel-head"><h2>Legend</h2></header>
+            <div class="panel-body">
+              <ul class="legend" id="legendList">
+                <li><span class="sw wl"></span> Water level</li>
+                <li><span class="sw curr"></span> Currents / PORTS</li>
+                <li><span class="sw met"></span> Meteorological</li>
+                <li><span class="sw buoy"></span> NDBC buoy</li>
+                <li><span class="sw pulse"></span> Fresh data</li>
+                <li><span class="sw flood"></span> Flood risk</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="alerts">
+            <header class="panel-head">
+              <h2>NWS Coastal Alerts</h2>
+              <button type="button" class="icon-btn" id="refreshWarningsBtn" title="Refresh">↻</button>
+            </header>
+            <div class="panel-body">
+              <div id="warningsCount" class="muted">Loading…</div>
+              <div id="warningsList" class="alert-list"></div>
+            </div>
+          </section>
+
+          <section class="panel sources-panel">
+            <header class="panel-head"><h2>Data Sources</h2></header>
+            <div class="panel-body sources-list">
+              <a href="https://tidesandcurrents.noaa.gov/" target="_blank" rel="noopener">NOAA CO-OPS</a>
+              <a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noopener">NDBC Buoys</a>
+              <a href="https://www.weather.gov/" target="_blank" rel="noopener">NWS Alerts</a>
+              <a href="https://waterdata.usgs.gov/" target="_blank" rel="noopener">USGS Water</a>
+              <a href="https://nowcoast.noaa.gov/" target="_blank" rel="noopener">nowCOAST</a>
+            </div>
+          </section>
+        </div>
       </aside>
 
-      <!-- COL 2: Map -->
-      <section class="map-container" id="mapColumn" aria-label="Map">
+      <div class="splitter" data-split="left" id="splitLeft" title="Drag to resize"></div>
+
+      <!-- MAP -->
+      <section class="map-pane" aria-label="Map">
         <div id="map"></div>
-        <div class="map-overlay-top">
-          <div class="coords" id="mapCoords">LAT -- LON --</div>
-          <div class="zoom-level" id="zoomLevel">Z --</div>
+        <div class="map-tools">
+          <button type="button" id="zoomInBtn" class="tool-btn" title="Zoom in">+</button>
+          <button type="button" id="zoomOutBtn" class="tool-btn" title="Zoom out">−</button>
+          <button type="button" id="locateBtn" class="tool-btn" title="My location">⌖</button>
+          <button type="button" id="fitBtn" class="tool-btn" title="Fit all stations">⊡</button>
         </div>
-        <div class="map-zoom-stack">
-          <button type="button" id="zoomInBtn" title="Zoom in">+</button>
-          <button type="button" id="zoomOutBtn" title="Zoom out">−</button>
-          <button type="button" id="zoomWorldBtn" title="World view">🌍</button>
-          <button type="button" id="zoomConusBtn" title="CONUS">US</button>
-          <button type="button" id="zoomRegionBtn" title="Zoom to Mid-Atlantic (NJ/PA/DE/MD)">MID</button>
-        </div>
-        <div id="radarHud" class="radar-hud hidden">
-          <span id="radarHudTime">RADAR</span>
-          <button type="button" id="radarHudPlay" title="Play/Pause">▶</button>
-        </div>
-        <div class="map-controls-left">
-          <button id="fitUSA" title="Fit USA">⌂ USA</button>
-          <button id="resetViewBtn" title="Reset view & filters">↺ RESET VIEW</button>
-          <button id="softRefreshBtn" title="Soft refresh data (keep watches)">↻ REFRESH</button>
-          <button id="toggleClusters" title="Toggle Clusters">◉ CLUSTERS</button>
-          <button id="toggleBuoys" title="Toggle Buoys" class="active">◎ BUOYS</button>
-          <button id="toggleTidePred" title="Tide prediction stations" class="active">◇ TIDE PRED</button>
-          <button id="toggleWarnings" title="NWS coastal flood alerts" class="active">⚠ WARNINGS</button>
+        <div class="map-attribution" id="mapAttribution">
+          Data © NOAA CO-OPS · NDBC · NWS · USGS · Map © Esri / OpenStreetMap
         </div>
       </section>
 
-      <!-- COL 3: Live data -->
-      <aside class="right-panel" id="rightPanel" aria-label="Realtime and gauges">
-        <section class="panel-section active-section">
-          <div class="section-header">
-            <span class="sec-title">REALTIME // ACTIVE</span>
-            <button type="button" class="icon-btn" id="refreshActive" title="Refresh">↻</button>
-          </div>
-          <div id="activeList" class="active-list">
-            <div class="loading">LOADING PORTS &amp; ACTIVE SITES...</div>
-          </div>
-        </section>
-        <section class="panel-section compact">
-          <div class="section-header">
-            <span class="sec-title">QUICK STATES</span>
-          </div>
-          <div class="quick-states" id="quickStates"></div>
-        </section>
-        <section class="panel-section hydro-panel">
-          <div class="section-header">
-            <span class="sec-title">HYDROLOGY // GAUGES</span>
-          </div>
-          <div class="hydro-layers">
-            <label class="hydro-item"><input type="checkbox" data-nc="river" /> NWS River Gauges</label>
-            <div class="hydro-sub">USGS MONITORING</div>
-            <label class="hydro-item"><input type="checkbox" data-usgs="streamflow" /> Streamflow</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="surface" /> Surface-water levels</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="groundwater" /> Groundwater levels</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="springs" /> Spring water levels</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="wq" /> Water quality</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="precip" /> Precipitation</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="atmos" /> Atmospheric</label>
-            <label class="hydro-item"><input type="checkbox" data-usgs="cameras" /> Cameras</label>
-            <div class="hydro-note">Clustered at national zoom. Click site for charts.</div>
-            <a class="hydro-link" href="https://dashboard.waterdata.usgs.gov/app/nwd/en/" target="_blank" rel="noopener">USGS National Water Dashboard ↗</a>
-          </div>
-        </section>
-        <section class="panel-section">
-          <div class="section-header">
-            <span class="sec-title">SOURCES</span>
-          </div>
-          <div class="sources">
-            ESRI · TOMTOM · GARMIN · FAO · NOAA · USGS<br />
-            CO-OPS MDAPI · DATA API · PORTS® · NWIS
-          </div>
-          
-        </section>
+      <div class="splitter" data-split="right" id="splitRight" title="Drag to resize"></div>
+
+      <!-- RIGHT RAIL -->
+      <aside class="rail right-rail" id="rightRail" aria-label="Stations and watches">
+        <div class="rail-scroll">
+          <section class="panel" data-panel="stations">
+            <header class="panel-head">
+              <h2>Stations</h2>
+              <span class="badge" id="stationBadge">0</span>
+            </header>
+            <div class="panel-body">
+              <div class="quick-states" id="quickStates"></div>
+              <div class="station-list" id="stationList">
+                <div class="empty-state">Loading stations…</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="watches">
+            <header class="panel-head">
+              <h2>Watch Strip</h2>
+              <button type="button" class="icon-btn" id="clearWatches" title="Clear all">×</button>
+            </header>
+            <div class="panel-body">
+              <div id="watchList" class="watch-list">
+                <div class="empty-state muted">Click a station → Add to watch</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="usgs">
+            <header class="panel-head">
+              <h2>USGS Gauges</h2>
+              <button type="button" class="icon-btn" id="refreshUsgs" title="Refresh">↻</button>
+            </header>
+            <div class="panel-body">
+              <div class="check-grid compact">
+                <label class="check"><input type="checkbox" data-usgs="streamflow" id="usgsStream" /><span>Streamflow</span></label>
+                <label class="check"><input type="checkbox" data-usgs="gage" id="usgsGage" /><span>Gage height</span></label>
+              </div>
+              <div id="usgsList" class="usgs-list muted">Enable a layer to load nearby gauges.</div>
+            </div>
+          </section>
+        </div>
       </aside>
     </main>
 
-    <!-- Watch strip full width -->
-    <section class="watch-strip" id="watchPanel">
-      <div class="watch-strip-header">
-        <span class="sec-title">WATCH // REALTIME STATIONS</span>
-        <span class="watch-updated" id="watchUpdated"></span>
-        <div class="watch-controls">
-          <select id="watchStateSelect"><option value="">STATE / TERRITORY</option></select>
-          <select id="watchStationSelect"><option value="">STATION</option></select>
-          <input type="text" id="watchInput" placeholder="or type ID / name..." />
-          <button id="addWatchBtn">ADD</button>
-          <button id="clearWatchBtn">CLEAR</button>
-        </div>
-      </div>
-      <div class="watch-strip-body" id="watchSlots">
-        <div class="watch-empty">Select a state/territory then a station (or type an ID) to monitor in realtime — updates every 2 min, SOL chime on change</div>
-      </div>
-    </section>
+    <!-- FLOATING WINDOW LAYER -->
+    <div id="floatLayer" class="float-layer" aria-live="polite"></div>
 
-    <div id="toast" class="toast hidden"></div>
-
-    <div id="stationModal" class="modal hidden">
-      <div class="modal-content">
-        <div class="modal-header">
-          <div class="modal-title">
-            <span class="data-tag">DATA</span>
-            <span id="modalStationName">STATION</span>
-            <span id="modalStationId" class="id-tag"></span>
-          </div>
-          <button type="button" class="close-btn" id="closeModal">×</button>
-        </div>
-        <div class="modal-meta">
-          <span id="modalMeta"></span>
-          <span id="modalUpdateTime"></span>
-        </div>
-        <div class="modal-tabs">
-          <button type="button" class="tab active" data-tab="latest">LATEST</button>
-          <button type="button" class="tab" data-tab="predictions">PREDICTIONS</button>
-          <button type="button" class="tab" data-tab="currents">CURRENTS</button>
-          <button type="button" class="tab" data-tab="flood">FLOOD RISK</button>
-        </div>
-        <div class="modal-body" id="tabContent"></div>
-        <div class="modal-footer">
-          <button type="button" id="showOnMapBtn">SHOW ON MAP</button>
-          <button type="button" id="addTideToMapBtn">ADD PRED OVERLAY</button>
-          <button type="button" id="watchBtn">WATCH</button>
-          <button type="button" id="popoutStationBtn">POP OUT</button>
-          <a id="officialLink" href="#" target="_blank" rel="noopener">NOAA STATION PAGE ↗</a>
-        </div>
-      </div>
-    </div>
-
-    <div id="alertModal" class="modal hidden">
-      <div class="modal-panel alert-modal-panel">
-        <div class="modal-header">
-          <div>
-            <div class="modal-title" id="alertModalEvent">ALERT</div>
-            <div class="modal-sub" id="alertModalSeverity"></div>
-          </div>
-          <button type="button" class="modal-close" id="closeAlertModal">×</button>
-        </div>
+    <!-- LAYOUT MODAL -->
+    <div id="layoutModal" class="modal hidden" role="dialog" aria-labelledby="layoutTitle">
+      <div class="modal-card">
+        <header class="modal-head">
+          <h2 id="layoutTitle">Layout</h2>
+          <button type="button" class="icon-btn" id="closeLayoutModal">×</button>
+        </header>
         <div class="modal-body">
-          <div id="alertModalArea" class="alert-area"></div>
-          <div id="alertModalHeadline" class="alert-headline"></div>
-          <pre id="alertModalDesc" class="alert-desc"></pre>
-          <div id="alertModalInstr" class="alert-instr"></div>
-          <div id="alertModalMeta" class="alert-meta"></div>
+          <p class="muted">Save the current view (panels, layers, map, watches) or load a previously saved layout. Layouts can be committed to the GitHub repo and shared via URL.</p>
+          <div class="btn-row">
+            <button type="button" id="exportLayoutBtn" class="primary-btn">Export JSON</button>
+            <label class="primary-btn file-btn">
+              Import JSON
+              <input type="file" id="importLayoutFile" accept=".json,application/json" hidden />
+            </label>
+            <button type="button" id="resetLayoutBtn" class="ghost-btn">Reset defaults</button>
+          </div>
+          <label class="field">
+            <span>Load from GitHub raw URL</span>
+            <div class="inline-row">
+              <input type="url" id="layoutUrlInput" placeholder="https://raw.githubusercontent.com/…/layout.json" />
+              <button type="button" id="loadLayoutUrlBtn" class="primary-btn">Load</button>
+            </div>
+          </label>
+          <p class="hint mono">Tip: append <code>?layout=URL</code> to the page address to auto-load.</p>
         </div>
       </div>
     </div>
 
-    <div id="tcx-utilities" aria-hidden="true" style="display:none!important">
-      <div id="watchContent"></div>
-      <span id="tidePredCount">0</span>
-      <span id="watchStationName"></span>
-      <button type="button" id="clearWatch" tabindex="-1"></button>
-    </div>
+    <!-- TOAST -->
+    <div id="toast" class="toast hidden" role="status"></div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
-  <script src="https://unpkg.com/esri-leaflet-vector@4.2.3/dist/esri-leaflet-vector.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
