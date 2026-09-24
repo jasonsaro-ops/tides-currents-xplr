@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="description" content="TIDES & CURRENTS XPLR — elite NOAA tides, currents and coastal intelligence dashboard with floating metadata windows." />
-  <meta name="theme-color" content="#0a0e14" />
+  <meta name="description" content="TIDES & CURRENTS XPLR — elite NOAA tides, currents and coastal intelligence dashboard." />
+  <meta name="theme-color" content="#070a0f" />
   <title>TIDES &amp; CURRENTS XPLR</title>
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin="" />
   <link rel="stylesheet" href="styles.css" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -18,7 +18,6 @@
 </head>
 <body>
   <div id="app" class="app">
-    <!-- ========== TOP COMMAND BAR ========== -->
     <header class="cmd-bar" role="banner">
       <div class="cmd-left">
         <button type="button" id="softRefreshBtn" class="logo-btn" title="Soft refresh (R)">
@@ -37,7 +36,7 @@
 
       <div class="cmd-search">
         <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        <input type="search" id="searchInput" placeholder="Search station, ID, state…" autocomplete="off" spellcheck="false" />
+        <input type="search" id="searchInput" placeholder="Search station, ID, state, zip…" autocomplete="off" spellcheck="false" />
         <kbd class="kbd">/</kbd>
       </div>
 
@@ -60,13 +59,11 @@
           <span class="refresh-hint mono" id="nextRefresh">2:00</span>
         </div>
         <button type="button" id="layoutBtn" class="ghost-btn" title="Save / load layout">Layout</button>
-        <button type="button" id="soundToggle" class="ghost-btn" title="Toggle alert chime">Sound</button>
+        <button type="button" id="soundToggle" class="ghost-btn" title="Toggle alert tones">Tones Off</button>
       </div>
     </header>
 
-    <!-- ========== MAIN GRID ========== -->
     <main class="main-grid" id="mainGrid">
-      <!-- LEFT RAIL -->
       <aside class="rail left-rail" id="leftRail" aria-label="Filters and layers">
         <div class="rail-scroll">
           <section class="panel" data-panel="filters">
@@ -154,13 +151,6 @@
                   <button type="button" id="radarRefreshBtn" class="icon-btn" title="Refresh">↻</button>
                 </div>
                 <label class="field tight">
-                  <span>Source</span>
-                  <select id="radarSource">
-                    <option value="iem" selected>IEM NEXRAD</option>
-                    <option value="rainviewer">RainViewer</option>
-                  </select>
-                </label>
-                <label class="field tight">
                   <span>Opacity</span>
                   <input type="range" id="radarOpacity" min="20" max="100" value="70" />
                 </label>
@@ -181,7 +171,7 @@
                 <li><span class="sw met"></span> Meteorological</li>
                 <li><span class="sw buoy"></span> NDBC buoy</li>
                 <li><span class="sw pulse"></span> Fresh data</li>
-                <li><span class="sw flood"></span> Flood risk</li>
+                <li><span class="sw flood"></span> Flood / alert</li>
               </ul>
             </div>
           </section>
@@ -212,7 +202,6 @@
 
       <div class="splitter" data-split="left" id="splitLeft" title="Drag to resize"></div>
 
-      <!-- MAP -->
       <section class="map-pane" aria-label="Map">
         <div id="map"></div>
         <div class="map-tools">
@@ -222,13 +211,12 @@
           <button type="button" id="fitBtn" class="tool-btn" title="Fit all stations">⊡</button>
         </div>
         <div class="map-attribution" id="mapAttribution">
-          Data © NOAA CO-OPS · NDBC · NWS · USGS · Map © Esri / OpenStreetMap
+          Data © NOAA CO-OPS · NDBC · NWS · USGS · Map © CARTO / Esri / OSM
         </div>
       </section>
 
       <div class="splitter" data-split="right" id="splitRight" title="Drag to resize"></div>
 
-      <!-- RIGHT RAIL -->
       <aside class="rail right-rail" id="rightRail" aria-label="Stations and watches">
         <div class="rail-scroll">
           <section class="panel" data-panel="stations">
@@ -273,10 +261,8 @@
       </aside>
     </main>
 
-    <!-- FLOATING WINDOW LAYER -->
     <div id="floatLayer" class="float-layer" aria-live="polite"></div>
 
-    <!-- LAYOUT MODAL -->
     <div id="layoutModal" class="modal hidden" role="dialog" aria-labelledby="layoutTitle">
       <div class="modal-card">
         <header class="modal-head">
@@ -284,7 +270,7 @@
           <button type="button" class="icon-btn" id="closeLayoutModal">×</button>
         </header>
         <div class="modal-body">
-          <p class="muted">Save the current view (panels, layers, map, watches) or load a previously saved layout. Layouts can be committed to the GitHub repo and shared via URL.</p>
+          <p class="muted">Save the current view or load a layout. Commit JSON to the GitHub repo and share with <code>?layout=URL</code>.</p>
           <div class="btn-row">
             <button type="button" id="exportLayoutBtn" class="primary-btn">Export JSON</button>
             <label class="primary-btn file-btn">
@@ -300,18 +286,16 @@
               <button type="button" id="loadLayoutUrlBtn" class="primary-btn">Load</button>
             </div>
           </label>
-          <p class="hint mono">Tip: append <code>?layout=URL</code> to the page address to auto-load.</p>
         </div>
       </div>
     </div>
 
-    <!-- TOAST -->
     <div id="toast" class="toast hidden" role="status"></div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin=""></script>
   <script src="app.js"></script>
 </body>
 </html>
