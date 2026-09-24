@@ -595,13 +595,13 @@
       var label = "";
       if (product === "water_temperature" && b.wtmp != null) label = (+b.wtmp).toFixed(0) + "°C";
       else if (product === "air_temperature" && b.atmp != null) label = (+b.atmp).toFixed(0) + "°C";
-      else if (product === "wind" && b.wind != null) label = b.wind + "kn";
+      else if (product === "wind" && b.wind != null) label = b.wind + "m/s";
       else if (product === "currents" && b.wind != null) label = ""; // NDBC has no current speed typically
       var m = L.marker([b.lat, b.lng], { icon: markerIcon("buoy", b._fresh, label) });
       var tip = "<strong>" + (b.name || b.id) + "</strong><br/>NDBC buoy";
       if (b.wtmp != null) tip += "<br/>Water " + b.wtmp + " °C";
       if (b.atmp != null) tip += "<br/>Air " + b.atmp + " °C";
-      if (b.wind != null) tip += "<br/>Wind " + b.wind + " kn";
+      if (b.wind != null) tip += "<br/>Wind " + b.wind + " m/s";
       if (b.wvht != null) tip += "<br/>Wave " + b.wvht + " m";
       m.bindTooltip(tip, { direction: "top", offset: [0, -8] });
       m.on("click", function () { openBuoyWindow(b); });
@@ -685,76 +685,160 @@
   }
 
   function loadBuoys() {
-    var urls = [
-      "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt",
-      "https://corsproxy.io/?" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"),
-      "https://api.allorigins.win/raw?url=" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt")
-    ];
-    function parseBuoyText(text) {
-      var lines = text.trim().split("\n");
-      // skip header lines starting with #
-      var startIdx = 0;
-      while (startIdx < lines.length && (lines[startIdx].charAt(0) === "#" || lines[startIdx].indexOf("YY") === 0 || lines[startIdx].indexOf("yr") >= 0)) {
-        startIdx++;
-      }
-      // standard latest_obs: first 2 lines are headers
-      if (startIdx < 2) startIdx = 2;
+    // Full NDBC network from activestations.xml + live latest_obs.txt
+    // https://www.ndbc.noaa.gov/activestations.xml
+    // https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt
+    function withProxies(url) {
+      return [
+        url,
+        "https://corsproxy.io/?" + encodeURIComponent(url),
+        "https://api.allorigins.win/raw?url=" + encodeURIComponent(url)
+      ];
+    }
+
+    function fetchTextChain(urls, i) {
+      i = i || 0;
+      if (i >= urls.length) return Promise.reject(new Error("all failed"));
+      return fetch(urls[i], { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.text();
+        })
+        .then(function (t) {
+          if (!t || t.length < 50) throw new Error("empty");
+          return t;
+        })
+        .catch(function () { return fetchTextChain(urls, i + 1); });
+    }
+
+    function parseActiveStationsXml(xmlText) {
       var list = [];
-      for (var i = startIdx; i < lines.length; i++) {
-        var p = lines[i].trim().split(/\s+/);
-        if (p.length < 6) continue;
-        var id = p[0];
-        var lat = parseFloat(p[1]);
-        var lon = parseFloat(p[2]);
-        if (!isFinite(lat) || !isFinite(lon)) continue;
-        // US coastal + territories + nearshore
-        if (lat < 10 || lat > 75 || lon < -180 || lon > -50) continue;
-        function mm(x) { return (x && x !== "MM" && x !== "999" && x !== "99.0") ? x : null; }
+      // Attribute-based: <station id="..." lat="..." lon="..." name="..." .../>
+      var re = /<station\s+([^>]+)\s*\/?>/gi;
+      var m;
+      while ((m = re.exec(xmlText)) !== null) {
+        var attrs = m[1];
+        function attr(name) {
+          var am = new RegExp(name + '="([^"]*)"', "i").exec(attrs);
+          return am ? am[1] : "";
+        }
+        var id = attr("id");
+        var lat = parseFloat(attr("lat"));
+        var lon = parseFloat(attr("lon"));
+        if (!id || !isFinite(lat) || !isFinite(lon)) continue;
+        if (lat === 0 && lon === 0) continue;
         list.push({
           id: id,
           lat: lat,
           lng: lon,
           type: "buoy",
-          name: "NDBC " + id,
-          wind: mm(p[6]),
-          gst: mm(p[7]),
-          wvht: mm(p[8]),
-          dpd: mm(p[9]),
-          apd: mm(p[10]),
-          mwd: mm(p[11]),
-          bar: mm(p[12]),
-          atmp: mm(p[13]),
-          wtmp: mm(p[14]),
-          dewp: mm(p[15]),
-          _fresh: true
+          name: attr("name") || ("NDBC " + id),
+          owner: attr("owner") || "",
+          program: attr("pgm") || "",
+          stationType: attr("type") || "",
+          elev: attr("elev") || "",
+          hasMet: attr("met") === "y",
+          hasCurrents: attr("currents") === "y",
+          hasWaterQuality: attr("waterquality") === "y",
+          hasDart: attr("dart") === "y",
+          _fresh: false
         });
       }
       return list;
     }
-    function tryUrl(i) {
-      if (i >= urls.length) {
-        if ($("#buoyCount")) $("#buoyCount").textContent = buoyStations.length ? String(buoyStations.length) : "—";
-        if (!buoyStations.length) toast("NDBC buoys unavailable (CORS)");
-        return Promise.resolve();
+
+    function parseLatestObs(text) {
+      var byId = {};
+      var lines = text.trim().split("\n");
+      var i = 0;
+      while (i < lines.length && (lines[i].charAt(0) === "#" || /^\s*(YY|yr)/i.test(lines[i]))) i++;
+      if (i < 2) i = 2;
+      function mm(x) {
+        if (x == null || x === "MM" || x === "999" || x === "99.0" || x === "9999.0") return null;
+        return x;
       }
-      return fetch(urls[i], { cache: "no-store" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("buoy " + r.status);
-          return r.text();
-        })
-        .then(function (text) {
-          if (!text || text.length < 100) throw new Error("empty");
-          var list = parseBuoyText(text);
-          if (!list.length) throw new Error("parse0");
-          buoyStations = list;
-          renderBuoys();
-          toast(list.length + " NDBC buoys loaded", 1800);
-        })
-        .catch(function () {
-          return tryUrl(i + 1);
-        });
+      for (; i < lines.length; i++) {
+        var p = lines[i].trim().split(/\s+/);
+        if (p.length < 6) continue;
+        var id = p[0];
+        byId[id] = {
+          year: p[3], month: p[4], day: p[5],
+          hour: p[6], minute: p[7],
+          wdir: mm(p[8]),
+          wind: mm(p[9]),
+          gst: mm(p[10]),
+          wvht: mm(p[11]),
+          dpd: mm(p[12]),
+          apd: mm(p[13]),
+          mwd: mm(p[14]),
+          bar: mm(p[15]),
+          ptdy: mm(p[16]),
+          atmp: mm(p[17]),
+          wtmp: mm(p[18]),
+          dewp: mm(p[19]),
+          vis: mm(p[20]),
+          pwater: mm(p[21]),
+          tide: mm(p[22]),
+          obsTime: (p[3] && p[4] && p[5])
+            ? (p[3] + "-" + p[4] + "-" + p[5] + " " + (p[6] || "00") + ":" + (p[7] || "00") + " UTC")
+            : ""
+        };
+      }
+      return byId;
     }
-    return tryUrl(0);
+
+    var catalogP = fetchTextChain(withProxies("https://www.ndbc.noaa.gov/activestations.xml"));
+    var obsP = fetchTextChain(withProxies("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"));
+
+    return Promise.all([
+      catalogP.catch(function () { return null; }),
+      obsP.catch(function () { return null; })
+    ]).then(function (pair) {
+      var xmlText = pair[0];
+      var obsText = pair[1];
+      var catalog = xmlText ? parseActiveStationsXml(xmlText) : [];
+      var obsMap = obsText ? parseLatestObs(obsText) : {};
+
+      // If catalog failed, build from obs only
+      if (!catalog.length && obsText) {
+        var lines = obsText.trim().split("\n");
+        var si = 2;
+        for (var li = si; li < lines.length; li++) {
+          var p = lines[li].trim().split(/\s+/);
+          if (p.length < 3) continue;
+          var lat = parseFloat(p[1]);
+          var lon = parseFloat(p[2]);
+          if (!isFinite(lat) || !isFinite(lon)) continue;
+          catalog.push({
+            id: p[0], lat: lat, lng: lon, type: "buoy",
+            name: "NDBC " + p[0], owner: "", program: "", stationType: "",
+            hasMet: true, hasCurrents: false, hasWaterQuality: false, hasDart: false, _fresh: true
+          });
+        }
+      }
+
+      // Merge observations onto catalog
+      catalog.forEach(function (b) {
+        var o = obsMap[b.id];
+        if (o) {
+          Object.keys(o).forEach(function (k) { b[k] = o[k]; });
+          b._fresh = true;
+          b.hasObs = true;
+        } else {
+          b.hasObs = false;
+        }
+      });
+
+      buoyStations = catalog;
+      renderBuoys();
+      var withObs = catalog.filter(function (b) { return b.hasObs; }).length;
+      toast(catalog.length + " NDBC stations (" + withObs + " with live obs)", 2400);
+      if ($("#buoyCount")) $("#buoyCount").textContent = catalog.length.toLocaleString();
+    }).catch(function (e) {
+      console.error("loadBuoys", e);
+      toast("NDBC network unavailable");
+      if ($("#buoyCount")) $("#buoyCount").textContent = "—";
+    });
   }
 
   function loadNwsAlerts() {
@@ -1541,29 +1625,171 @@
   }
 
   function openBuoyWindow(b) {
-    const key = b.id;
-    const body =
-      '<div class="meta-grid">' +
-        '<div class="meta-card"><div class="ml">Buoy ID</div><div class="mv mono">' + b.id + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Type</div><div class="mv">NDBC</div></div>' +
-        '<div class="meta-card"><div class="ml">Lat / Lon</div><div class="mv mono">' + fmtNum(b.lat, 4) + ", " + fmtNum(b.lng, 4) + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Wind</div><div class="mv accent">' + (b.wind != null ? b.wind : "—") + " kn</div></div>" +
-        '<div class="meta-card"><div class="ml">Gust</div><div class="mv">' + (b.gst != null ? b.gst : "—") + " kn</div></div>" +
-        '<div class="meta-card"><div class="ml">Wave height</div><div class="mv accent">' + (b.wvht != null ? b.wvht : "—") + " m</div></div>" +
-        '<div class="meta-card"><div class="ml">Air temp</div><div class="mv">' + (b.atmp != null ? b.atmp : "—") + " °C</div></div>" +
-        '<div class="meta-card"><div class="ml">Water temp</div><div class="mv">' + (b.wtmp != null ? b.wtmp : "—") + " °C</div></div>" +
-      "</div>" +
-      '<div class="btn-row">' +
-        '<a class="action-btn primary" href="https://www.ndbc.noaa.gov/station_page.php?station=' + b.id + '" target="_blank" rel="noopener">NDBC station ↗</a>' +
-        '<button type="button" class="action-btn" data-act="center">Center map</button>' +
-      "</div>" +
-      '<div class="source-bar">Source: <a href="https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt" target="_blank" rel="noopener">NDBC latest_obs</a></div>';
-
-    const win = openFloat(key, b.name || b.id, "NDBC buoy", body, { edgeClass: "edge-buoy" });
-    if (win) {
-      const c = win.querySelector('[data-act="center"]');
-      if (c) c.onclick = function () { if (map) map.setView([b.lat, b.lng], 10); };
+    var key = "buoy_" + b.id;
+    function cell(label, val, unit) {
+      unit = unit || "";
+      var display = (val != null && val !== "") ? (val + (unit ? " " + unit : "")) : "—";
+      return '<div class="meta-card"><div class="ml">' + label + '</div><div class="mv' +
+        (val != null && val !== "" ? " accent" : "") + '">' + display + "</div></div>";
     }
+
+    var caps = [];
+    if (b.hasMet) caps.push("Met");
+    if (b.hasCurrents) caps.push("Currents");
+    if (b.hasWaterQuality) caps.push("Water quality");
+    if (b.hasDart) caps.push("DART");
+
+    var body =
+      '<div class="float-tabs">' +
+        '<button type="button" class="float-tab active" data-pane="obs">Observations</button>' +
+        '<button type="button" class="float-tab" data-pane="meta">Station info</button>' +
+        '<button type="button" class="float-tab" data-pane="series">Recent series</button>' +
+      "</div>" +
+      '<div data-pane-content="obs">' +
+        '<div class="meta-grid">' +
+          cell("Wind dir", b.wdir, "°") +
+          cell("Wind speed", b.wind, "m/s") +
+          cell("Gust", b.gst, "m/s") +
+          cell("Wave height", b.wvht, "m") +
+          cell("Dom period", b.dpd, "s") +
+          cell("Avg period", b.apd, "s") +
+          cell("Wave dir", b.mwd, "°") +
+          cell("Pressure", b.bar, "hPa") +
+          cell("Air temp", b.atmp, "°C") +
+          cell("Water temp", b.wtmp, "°C") +
+          cell("Dew point", b.dewp, "°C") +
+          cell("Visibility", b.vis, "nmi") +
+          cell("Tide", b.tide, "ft") +
+          cell("Observed", b.obsTime || (b.hasObs ? "yes" : "no live obs"), "") +
+        "</div>" +
+        '<div class="btn-row">' +
+          '<button type="button" class="action-btn primary" data-act="center">Center map</button>' +
+          '<button type="button" class="action-btn" data-act="watch">★ Watch</button>' +
+        "</div>" +
+      "</div>" +
+      '<div data-pane-content="meta" style="display:none">' +
+        '<div class="meta-grid">' +
+          cell("Station ID", b.id, "") +
+          cell("Name", b.name || "—", "") +
+          cell("Type", b.stationType || "buoy", "") +
+          cell("Owner", b.owner || "—", "") +
+          cell("Program", b.program || "—", "") +
+          cell("Latitude", fmtNum(b.lat, 4), "°") +
+          cell("Longitude", fmtNum(b.lng, 4), "°") +
+          cell("Elevation", b.elev || "—", "m") +
+          cell("Capabilities", caps.length ? caps.join(", ") : "—", "") +
+        "</div>" +
+      "</div>" +
+      '<div data-pane-content="series" style="display:none">' +
+        '<div id="buoySeries_' + b.id + '" class="muted">Loading recent realtime file…</div>' +
+        '<div class="chart-box" style="margin-top:10px"><canvas id="buoyChart_' + b.id + '"></canvas></div>' +
+      "</div>" +
+      '<div class="source-bar">' +
+        "Source: NDBC · data embedded in this app from " +
+        '<span class="mono">activestations.xml</span> + <span class="mono">latest_obs.txt</span>' +
+        " · <a href=\"https://www.ndbc.noaa.gov/station_page.php?station=" + encodeURIComponent(b.id) +
+        "\" target=\"_blank\" rel=\"noopener\">Official station page ↗</a> (reference only)" +
+      "</div>";
+
+    var win = openFloat(key, b.name || ("NDBC " + b.id), "NDBC " + b.id + (b.hasObs ? " · live" : " · catalog"), body, {
+      width: 460, edgeClass: "edge-buoy"
+    });
+    if (!win) return;
+
+    var c = win.querySelector('[data-act="center"]');
+    if (c) c.onclick = function () { if (map) map.setView([b.lat, b.lng], 9); };
+    var w = win.querySelector('[data-act="watch"]');
+    if (w) w.onclick = function () { addWatch(b); toast("Watching " + (b.name || b.id)); };
+
+    // Load realtime2 series in-app
+    loadBuoyRealtimeSeries(b, win);
+  }
+
+  function loadBuoyRealtimeSeries(b, win) {
+    var box = win.querySelector("#buoySeries_" + b.id);
+    var canvas = win.querySelector("#buoyChart_" + b.id);
+    if (!box) return;
+    var urls = [
+      "https://www.ndbc.noaa.gov/data/realtime2/" + b.id + ".txt",
+      "https://corsproxy.io/?" + encodeURIComponent("https://www.ndbc.noaa.gov/data/realtime2/" + b.id + ".txt"),
+      "https://api.allorigins.win/raw?url=" + encodeURIComponent("https://www.ndbc.noaa.gov/data/realtime2/" + b.id + ".txt")
+    ];
+    function tryFetch(i) {
+      if (i >= urls.length) {
+        box.textContent = "Recent series unavailable for this station.";
+        return;
+      }
+      fetch(urls[i], { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("rt");
+          return r.text();
+        })
+        .then(function (text) {
+          var lines = text.trim().split("\n").filter(function (ln) {
+            return ln && ln.charAt(0) !== "#";
+          });
+          // header may be first non-# line
+          if (lines.length && /YY|year/i.test(lines[0])) lines = lines.slice(1);
+          if (lines.length && /yr|mo|dy/i.test(lines[0])) lines = lines.slice(1);
+          var pts = [];
+          lines.slice(-72).forEach(function (ln) {
+            var p = ln.trim().split(/\s+/);
+            if (p.length < 15) return;
+            var wtmp = p[14];
+            var wspd = p[6];
+            if (wtmp === "MM" && wspd === "MM") return;
+            var label = (p[3] || "") + ":" + (p[4] || "");
+            pts.push({
+              t: label,
+              wtmp: wtmp !== "MM" ? +wtmp : null,
+              wind: wspd !== "MM" ? +wspd : null,
+              wvht: p[8] !== "MM" ? +p[8] : null
+            });
+          });
+          if (!pts.length) {
+            box.textContent = "No recent numeric samples in realtime file.";
+            return;
+          }
+          box.innerHTML = "<strong>" + pts.length + "</strong> recent samples from NDBC realtime2/" + b.id + ".txt";
+          if (canvas && typeof Chart !== "undefined") {
+            var chartKey = "buoy_rt_" + b.id;
+            if (chartInstances.has(chartKey)) {
+              try { chartInstances.get(chartKey).destroy(); } catch (e) {}
+            }
+            var useWtmp = pts.some(function (p) { return p.wtmp != null; });
+            var data = pts.map(function (p) { return useWtmp ? p.wtmp : p.wind; });
+            var labels = pts.map(function (p) { return p.t; });
+            var chart = new Chart(canvas, {
+              type: "line",
+              data: {
+                labels: labels,
+                datasets: [{
+                  label: useWtmp ? "Water temp °C" : "Wind kn",
+                  data: data,
+                  borderColor: "#fb923c",
+                  backgroundColor: "rgba(251,146,60,0.12)",
+                  fill: true,
+                  tension: 0.25,
+                  pointRadius: 0,
+                  borderWidth: 1.5
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: true, labels: { color: "#8b9bb4", font: { size: 11 } } } },
+                scales: {
+                  x: { ticks: { color: "#5c6b82", maxTicksLimit: 6, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+                  y: { ticks: { color: "#5c6b82", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.06)" } }
+                }
+              }
+            });
+            chartInstances.set(chartKey, chart);
+          }
+        })
+        .catch(function () { tryFetch(i + 1); });
+    }
+    tryFetch(0);
   }
 
   function openAlertWindow(a) {
