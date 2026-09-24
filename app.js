@@ -64,6 +64,8 @@
   let nwsAlertLayer = null;
   let stations = [];
   let buoyStations = [];
+  let tropicalStorms = [];
+  let tropicalLayer = null;
   let nwsAlerts = [];
   let watched = [];
   let floatWindows = new Map();
@@ -488,6 +490,7 @@
     map.addLayer(markersLayer);
 
     buoyLayer = L.layerGroup().addTo(map);
+    tropicalLayer = L.layerGroup().addTo(map);
     nwsAlertLayer = L.layerGroup().addTo(map);
 
     // Force size after layout settles
@@ -856,6 +859,132 @@
         toast("NDBC unavailable — ensure data/ndbc-latest.json is in the repo");
         if ($("#buoyCount")) $("#buoyCount").textContent = "—";
       });
+  }
+
+  function loadTropicalStorms() {
+    return fetch("data/nhc-active.json", { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("no local nhc");
+        return r.json();
+      })
+      .then(function (j) {
+        tropicalStorms = (j.storms || []).filter(function (s) {
+          return isFinite(+s.lat) && isFinite(+s.lng);
+        });
+        renderTropicalStorms();
+        if (tropicalStorms.length) {
+          toast(tropicalStorms.length + " active tropical system(s): " +
+            tropicalStorms.map(function (s) { return s.name; }).join(", "), 3200);
+        }
+      })
+      .catch(function () {
+        // try live NHC (may CORS-fail)
+        return corsJson("https://www.nhc.noaa.gov/CurrentStorms.json")
+          .then(function (j) {
+            tropicalStorms = (j.activeStorms || []).map(function (s) {
+              return {
+                id: s.id,
+                name: s.name,
+                classification: s.classification,
+                intensity: s.intensity,
+                pressure: s.pressure,
+                lat: s.latitudeNumeric,
+                lng: s.longitudeNumeric,
+                latitude: s.latitude,
+                longitude: s.longitude,
+                movementDir: s.movementDir,
+                movementSpeed: s.movementSpeed,
+                lastUpdate: s.lastUpdate,
+                binNumber: s.binNumber,
+                publicAdvisory: s.publicAdvisory && s.publicAdvisory.url,
+                forecastAdvisory: s.forecastAdvisory && s.forecastAdvisory.url,
+                forecastDiscussion: s.forecastDiscussion && s.forecastDiscussion.url,
+                forecastGraphics: s.forecastGraphics && s.forecastGraphics.url,
+                raw: s
+              };
+            }).filter(function (s) { return isFinite(+s.lat) && isFinite(+s.lng); });
+            renderTropicalStorms();
+          })
+          .catch(function () {
+            tropicalStorms = [];
+          });
+      });
+  }
+
+  function stormIcon(cls) {
+    var color = "#f97316";
+    if (cls === "HU" || cls === "MH") color = "#ef4444";
+    if (cls === "TS") color = "#fb923c";
+    if (cls === "TD" || cls === "SS" || cls === "SD") color = "#fbbf24";
+    if (cls === "PTC" || cls === "DB") color = "#a3a3a3";
+    var html = '<div class="tcx-storm" style="--sc:' + color + '"><span>🌀</span></div>';
+    return L.divIcon({
+      className: "tcx-div-icon",
+      html: html,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+  }
+
+  function renderTropicalStorms() {
+    if (!tropicalLayer) return;
+    tropicalLayer.clearLayers();
+    // respect tropical_nc checkbox if present
+    var cb = $('input[data-nc="tropical_nc"]');
+    var show = !cb || cb.checked;
+    if (!show) return;
+    tropicalStorms.forEach(function (s) {
+      var m = L.marker([+s.lat, +s.lng], { icon: stormIcon(s.classification), zIndexOffset: 800 });
+      var tip = "<strong>" + (s.classification || "") + " " + (s.name || s.id) + "</strong><br/>"
+        + (s.intensity ? s.intensity + " kt · " : "")
+        + (s.pressure ? s.pressure + " mb" : "");
+      m.bindTooltip(tip, { direction: "top", offset: [0, -12] });
+      m.on("click", function () { openStormWindow(s); });
+      tropicalLayer.addLayer(m);
+    });
+  }
+
+  function openStormWindow(s) {
+    var key = "storm_" + (s.id || s.name);
+    function cell(label, val, unit) {
+      unit = unit || "";
+      var display = (val != null && val !== "") ? (String(val) + (unit ? " " + unit : "")) : "—";
+      return '<div class="meta-card"><div class="ml">' + label + '</div><div class="mv' +
+        (val != null && val !== "" ? " accent" : "") + '">' + display + "</div></div>";
+    }
+    var clsLabel = {
+      HU: "Hurricane", MH: "Major Hurricane", TS: "Tropical Storm", TD: "Tropical Depression",
+      SS: "Subtropical Storm", SD: "Subtropical Depression", PTC: "Potential Tropical Cyclone",
+      DB: "Disturbance", EX: "Extratropical", LO: "Low", WV: "Tropical Wave"
+    };
+    var body =
+      '<div class="meta-grid">' +
+        cell("Name", s.name, "") +
+        cell("Classification", (clsLabel[s.classification] || s.classification || "—") + (s.classification ? " (" + s.classification + ")" : ""), "") +
+        cell("Intensity", s.intensity, "kt") +
+        cell("Pressure", s.pressure, "mb") +
+        cell("Position", (s.latitude || s.lat) + " / " + (s.longitude || s.lng), "") +
+        cell("Movement", (s.movementDir != null ? s.movementDir + "°" : "—") + (s.movementSpeed != null ? " at " + s.movementSpeed + " kt" : ""), "") +
+        cell("Last update", s.lastUpdate ? new Date(s.lastUpdate).toUTCString() : "—", "") +
+        cell("Bin", s.binNumber || "—", "") +
+        cell("Storm ID", s.id || "—", "") +
+      "</div>" +
+      '<div class="btn-row">' +
+        '<button type="button" class="action-btn primary" data-act="center">Center map</button>' +
+      "</div>" +
+      '<div class="source-bar">' +
+        "Source: NHC CurrentStorms · " +
+        (s.publicAdvisory ? '<a href="' + s.publicAdvisory + '" target="_blank" rel="noopener">Public advisory ↗</a> · ' : "") +
+        (s.forecastDiscussion ? '<a href="' + s.forecastDiscussion + '" target="_blank" rel="noopener">Discussion ↗</a> · ' : "") +
+        (s.forecastGraphics ? '<a href="' + s.forecastGraphics + '" target="_blank" rel="noopener">Graphics ↗</a>' : "") +
+      "</div>";
+
+    var win = openFloat(key, (s.classification || "") + " " + (s.name || "Storm"), "NHC active", body, {
+      width: 440, edgeClass: "edge-alert"
+    });
+    if (!win) return;
+    var c = win.querySelector('[data-act="center"]');
+    if (c) c.onclick = function () { if (map) map.setView([+s.lat, +s.lng], 5); };
   }
 
   function loadNwsAlerts() {
@@ -1673,7 +1802,7 @@
           cell("Dew point", b.dewp, "°C") +
           cell("Visibility", b.vis, "nmi") +
           cell("Tide", b.tide, "ft") +
-          cell("Observed", b.obsTime || (b.hasObs ? "yes" : "no live obs"), "") +
+          cell("Observed", b.obsTime || (b.hasObs ? "yes" : "Station not in latest_obs (not currently reporting)"), "") +
         "</div>" +
         '<div class="btn-row">' +
           '<button type="button" class="action-btn primary" data-act="center">Center map</button>' +
@@ -1704,7 +1833,7 @@
         "\" target=\"_blank\" rel=\"noopener\">Official station page ↗</a> (reference only)" +
       "</div>";
 
-    var win = openFloat(key, b.name || ("NDBC " + b.id), "NDBC " + b.id + (b.hasObs ? " · live" : " · catalog"), body, {
+    var win = openFloat(key, b.name || ("NDBC " + b.id), "NDBC " + b.id + (b.hasObs ? " · live obs" : " · not reporting"), body, {
       width: 460, edgeClass: "edge-buoy"
     });
     if (!win) return;
@@ -1839,9 +1968,7 @@
       special: "satellite"
     },
     tropical_nc: {
-      url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer",
-      opacity: 0.8,
-      label: "NHC tropical weather"
+      special: "tropical"
     },
     lightning: {
       url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer",
@@ -1946,6 +2073,15 @@
     var def = NC_SERVICES[id];
     if (!def) return;
 
+    if (def.special === "tropical") {
+      if (on) {
+        if (!tropicalStorms.length) loadTropicalStorms();
+        else renderTropicalStorms();
+      } else if (tropicalLayer) {
+        tropicalLayer.clearLayers();
+      }
+      return;
+    }
     if (def.special === "radar") {
       var box = $("#radarControls");
       if (box) box.classList.toggle("hidden", !on);
@@ -2128,7 +2264,7 @@
   function softRefresh() {
     nextRefreshAt = Date.now() + REFRESH_MS;
     playSoftRefreshTone();
-    Promise.all([refreshAllWatches(), loadNwsAlerts(), loadBuoys()])
+    Promise.all([refreshAllWatches(), loadNwsAlerts(), loadBuoys(), loadTropicalStorms()])
       .then(function () {
         stations.forEach(function (s) { s._fresh = false; });
         toast("Data refreshed", 1600);
@@ -2327,6 +2463,7 @@
       // parallel data load — don't block UI
       loadStations();
       loadBuoys();
+      loadTropicalStorms();
       loadNwsAlerts();
       startRefreshCycle();
     } catch (err) {

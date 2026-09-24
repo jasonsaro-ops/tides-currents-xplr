@@ -747,3 +747,13 @@ button, input, select { font: inherit; color: inherit; }
   pointer-events: none;
   text-shadow: 0 1px 2px rgba(0,0,0,0.8);
 }
+
+.tcx-storm {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--sc, #f97316) 25%, rgba(0,0,0,0.7));
+  border: 2px solid var(--sc, #f97316);
+  border-radius: 50%;
+  font-size: 14px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--sc, #f97316) 50%, transparent);
+}
