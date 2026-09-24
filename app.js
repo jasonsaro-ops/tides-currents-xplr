@@ -35,6 +35,7 @@
   let currentBasemap = "dark";
   let basemapLayers = {};
   let radarState = { playing: false, frames: [], idx: 0, layer: null, timer: null };
+  let ncActiveLayers = {}; // id -> Leaflet layer
   let zipCenter = null; // {lat,lng} when searching by zip
   let knownAlertIds = new Set();
   let alertsBaseline = false;
@@ -405,22 +406,22 @@
       preferCanvas: true
     });
 
-    // All basemaps are API-key-free public tile services
+    // All basemaps are API-key-free. maxNativeZoom prevents Esri "Zoom Level Not Supported" tiles.
     basemapLayers = {
       dark: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
-        maxZoom: 16, attribution: "Esri"
+        maxNativeZoom: 16, maxZoom: 19, attribution: "Esri"
       }),
       imagery: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-        maxZoom: 19, attribution: "Esri"
+        maxNativeZoom: 19, maxZoom: 19, attribution: "Esri"
       }),
       topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-        maxZoom: 17, subdomains: "abc", attribution: "OpenTopoMap"
+        maxNativeZoom: 17, maxZoom: 19, subdomains: "abc", attribution: "OpenTopoMap"
       }),
       streets: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19, subdomains: "abc", attribution: "© OpenStreetMap"
+        maxNativeZoom: 19, maxZoom: 19, subdomains: "abc", attribution: "© OpenStreetMap"
       }),
       ocean: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}", {
-        maxZoom: 13, attribution: "Esri"
+        maxNativeZoom: 13, maxZoom: 19, attribution: "Esri"
       })
     };
     basemapLayers.dark.addTo(map);
@@ -1201,17 +1202,123 @@
   }
 
   // ---------- RADAR ----------
+  // ---------- nowCOAST / NOAA overlay layers ----------
+  // Public NOAA MapServer endpoints (no API key). Radar uses RainViewer for animation.
+  const NC_LAYER_DEFS = {
+    alerts_nc: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer",
+      opacity: 0.55
+    },
+    waterlevels_nc: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      opacity: 0.8
+    },
+    sfc_currents: {
+      type: "esri",
+      // NDBC / metocean observations as proxy when currents model tiles unavailable
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      opacity: 0.65,
+      note: "River gauges (surface flow proxy)"
+    },
+    sst_nc: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/raster/rest/services/NDFD/NDFD_temp/MapServer",
+      opacity: 0.55
+    },
+    satellite: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer",
+      opacity: 0.5,
+      layers: [0]
+    },
+    tropical_nc: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer",
+      opacity: 0.75
+    },
+    lightning: {
+      type: "esri",
+      // NWS hazards / outlooks proxy when dedicated lightning tiles unavailable
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer",
+      opacity: 0.4
+    },
+    precip_amt: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer",
+      opacity: 0.6
+    },
+    inland_flood: {
+      type: "esri",
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      opacity: 0.7
+    }
+  };
+
+  function createNcLayer(id) {
+    const def = NC_LAYER_DEFS[id];
+    if (!def) return null;
+    if (def.type === "esri") {
+      if (typeof L === "undefined" || !L.esri || !L.esri.dynamicMapLayer) {
+        console.warn("esri-leaflet not loaded; cannot add", id);
+        toast("Map overlay library missing — reload page");
+        return null;
+      }
+      const opts = {
+        url: def.url,
+        opacity: def.opacity != null ? def.opacity : 0.6,
+        f: "image",
+        useCors: true
+      };
+      if (def.layers) opts.layers = def.layers;
+      try {
+        return L.esri.dynamicMapLayer(opts);
+      } catch (e) {
+        console.error("createNcLayer", id, e);
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function toggleNcLayer(id, on) {
+    if (id === "radar") {
+      const box = $("#radarControls");
+      if (box) box.classList.toggle("hidden", !on);
+      if (on) startRadar();
+      else stopRadar();
+      return;
+    }
+    if (on) {
+      if (ncActiveLayers[id]) return;
+      const layer = createNcLayer(id);
+      if (layer && map) {
+        layer.addTo(map);
+        ncActiveLayers[id] = layer;
+        if (NC_LAYER_DEFS[id] && NC_LAYER_DEFS[id].note) {
+          toast(NC_LAYER_DEFS[id].note, 2000);
+        }
+      }
+    } else {
+      if (ncActiveLayers[id] && map) {
+        try { map.removeLayer(ncActiveLayers[id]); } catch (e) {}
+      }
+      delete ncActiveLayers[id];
+    }
+  }
+
   function initNowCoast() {
     $$("input[data-nc]").forEach(function (cb) {
       cb.addEventListener("change", function () {
-        if (cb.dataset.nc === "radar") {
-          const box = $("#radarControls");
-          if (box) box.classList.toggle("hidden", !cb.checked);
-          if (cb.checked) startRadar();
-          else stopRadar();
-        }
+        toggleNcLayer(cb.dataset.nc, cb.checked);
         saveLayoutLocal();
       });
+      // restore checked state after layout load may fire before map ready —
+      // re-apply once when map exists
+      if (cb.checked) {
+        setTimeout(function () { toggleNcLayer(cb.dataset.nc, true); }, 400);
+      }
     });
     const play = $("#radarPlayBtn");
     const prev = $("#radarPrevBtn");
@@ -1243,14 +1350,16 @@
     fetch("https://api.rainviewer.com/public/weather-maps.json")
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        const frames = (j.radar && j.radar.past || []).concat(j.radar && j.radar.nowcast || []).slice(-12);
+        const past = (j.radar && j.radar.past) || [];
+        const nowc = (j.radar && j.radar.nowcast) || [];
+        const frames = past.concat(nowc).slice(-12);
         radarState.frames = frames.map(function (f) {
           return {
             time: f.time,
             url: "https://tilecache.rainviewer.com" + f.path + "/256/{z}/{x}/{y}/2/1_1.png"
           };
         });
-        radarState.idx = radarState.frames.length - 1;
+        radarState.idx = Math.max(0, radarState.frames.length - 1);
         showRadarFrame();
         radarState.playing = true;
         if ($("#radarPlayBtn")) $("#radarPlayBtn").textContent = "⏸";
@@ -1263,9 +1372,17 @@
     if (!map) return;
     const f = radarState.frames[radarState.idx];
     if (!f) return;
-    if (radarState.layer) map.removeLayer(radarState.layer);
+    if (radarState.layer) {
+      try { map.removeLayer(radarState.layer); } catch (e) {}
+    }
     const op = ($("#radarOpacity") && +$("#radarOpacity").value) || 70;
-    radarState.layer = L.tileLayer(f.url, { opacity: op / 100, zIndex: 300 }).addTo(map);
+    radarState.layer = L.tileLayer(f.url, {
+      opacity: op / 100,
+      zIndex: 300,
+      maxNativeZoom: 12,
+      maxZoom: 19,
+      errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+    }).addTo(map);
     const d = new Date(f.time * 1000);
     if ($("#radarFrameLabel")) $("#radarFrameLabel").textContent = "Frame " + (radarState.idx + 1) + "/" + radarState.frames.length;
     if ($("#radarTimeLabel")) $("#radarTimeLabel").textContent = d.toISOString().slice(11, 16) + " UTC";
@@ -1282,7 +1399,7 @@
     radarState.playing = false;
     clearTimeout(radarState.timer);
     if (radarState.layer && map) {
-      map.removeLayer(radarState.layer);
+      try { map.removeLayer(radarState.layer); } catch (e) {}
       radarState.layer = null;
     }
     if ($("#radarPlayBtn")) $("#radarPlayBtn").textContent = "▶";
