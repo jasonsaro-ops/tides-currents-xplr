@@ -685,3 +685,8 @@ button, input, select { font: inherit; color: inherit; }
 .leaflet-tile-pane .tcx-tiles-imagery {
   filter: saturate(0.15) contrast(1.05) brightness(0.85);
 }
+
+.nc-export-overlay {
+  pointer-events: none;
+  image-rendering: auto;
+}

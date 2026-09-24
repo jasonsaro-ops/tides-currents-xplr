@@ -1210,12 +1210,169 @@
   }
 
   // ---------- RADAR ----------
-  // ---------- Overlay layers (no Esri tiles — those paint "Zoom Level Not Supported") ----------
-  // Radar/satellite/precip: RainViewer. Alerts: NWS GeoJSON we already fetch.
-  // Other toggles: useful overlays from free sources that work at all zoom levels.
+  // ---------- nowCOAST-style overlays via ArcGIS *export* (bbox) ----------
+  // Cached Esri *tiles* paint "Zoom Level Not Supported". Dynamic /export images do not.
+  // Each overlay is an ImageOverlay refreshed on moveend/zoomend.
 
-  function transparentGif() {
-    return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const NC_SERVICES = {
+    alerts_nc: {
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer",
+      opacity: 0.55,
+      label: "NWS watches & warnings"
+    },
+    waterlevels_nc: {
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      opacity: 0.75,
+      label: "River / coastal gauges"
+    },
+    sfc_currents: {
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      opacity: 0.65,
+      label: "Surface flow gauges"
+    },
+    sst_nc: {
+      url: "https://mapservices.weather.noaa.gov/raster/rest/services/NDFD/NDFD_temp/MapServer",
+      opacity: 0.5,
+      label: "NDFD temperature"
+    },
+    satellite: {
+      // handled by RainViewer infrared
+      special: "satellite"
+    },
+    tropical_nc: {
+      url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer",
+      opacity: 0.8,
+      label: "NHC tropical weather"
+    },
+    lightning: {
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer",
+      opacity: 0.35,
+      label: "Hazard zones (lightning proxy)"
+    },
+    precip_amt: {
+      url: "https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer",
+      opacity: 0.6,
+      label: "RFC precipitation"
+    },
+    inland_flood: {
+      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      opacity: 0.7,
+      label: "Flood-related gauges"
+    },
+    radar: {
+      special: "radar"
+    }
+  };
+
+  // id -> { overlay, onMove, opacity }
+  let ncOverlays = {};
+
+  function buildExportUrl(serviceUrl, bounds, size, opacity) {
+    // Leaflet LatLngBounds → xmin,ymin,xmax,ymax in WGS84
+    var west = bounds.getWest();
+    var south = bounds.getSouth();
+    var east = bounds.getEast();
+    var north = bounds.getNorth();
+    // clamp slight overworld
+    if (west < -180) west = -180;
+    if (east > 180) east = 180;
+    if (south < -85) south = -85;
+    if (north > 85) north = 85;
+    var w = Math.max(64, Math.min(2048, Math.round(size.x)));
+    var h = Math.max(64, Math.min(2048, Math.round(size.y)));
+    return serviceUrl + "/export"
+      + "?bbox=" + encodeURIComponent(west + "," + south + "," + east + "," + north)
+      + "&bboxSR=4326&imageSR=4326"
+      + "&size=" + w + "," + h
+      + "&dpi=96&format=png32&transparent=true&f=image";
+  }
+
+  function refreshExportOverlay(id) {
+    var entry = ncOverlays[id];
+    if (!entry || !map) return;
+    var def = NC_SERVICES[id];
+    if (!def || !def.url) return;
+    var bounds = map.getBounds().pad(0.02);
+    var size = map.getSize();
+    var url = buildExportUrl(def.url, bounds, size);
+    // cache-bust so browsers don't stick on old frames
+    url += "&_ts=" + Date.now();
+
+    if (entry.overlay) {
+      entry.overlay.setUrl(url);
+      entry.overlay.setBounds(bounds);
+      entry.overlay.setOpacity(entry.opacity);
+    } else {
+      entry.overlay = L.imageOverlay(url, bounds, {
+        opacity: entry.opacity,
+        interactive: false,
+        className: "nc-export-overlay",
+        zIndex: 400
+      });
+      entry.overlay.addTo(map);
+    }
+  }
+
+  function addExportOverlay(id) {
+    var def = NC_SERVICES[id];
+    if (!def || !def.url || !map) return;
+    if (ncOverlays[id]) return;
+    var opacity = def.opacity != null ? def.opacity : 0.6;
+    ncOverlays[id] = { overlay: null, opacity: opacity, onMove: null };
+    var refresh = function () { refreshExportOverlay(id); };
+    ncOverlays[id].onMove = refresh;
+    map.on("moveend", refresh);
+    map.on("zoomend", refresh);
+    refresh();
+    if (def.label) toast(def.label + " on", 1600);
+  }
+
+  function removeExportOverlay(id) {
+    var entry = ncOverlays[id];
+    if (!entry) return;
+    if (entry.onMove && map) {
+      map.off("moveend", entry.onMove);
+      map.off("zoomend", entry.onMove);
+    }
+    if (entry.overlay && map) {
+      try { map.removeLayer(entry.overlay); } catch (e) {}
+    }
+    delete ncOverlays[id];
+  }
+
+  function toggleNcLayer(id, on) {
+    var def = NC_SERVICES[id];
+    if (!def) return;
+
+    if (def.special === "radar") {
+      var box = $("#radarControls");
+      if (box) box.classList.toggle("hidden", !on);
+      if (on) startRadar("radar");
+      else stopRadar();
+      return;
+    }
+    if (def.special === "satellite") {
+      var box2 = $("#radarControls");
+      if (box2) box2.classList.toggle("hidden", !on);
+      if (on) startRadar("satellite");
+      else {
+        var rad = $('input[data-nc="radar"]');
+        if (rad && rad.checked) startRadar("radar");
+        else stopRadar();
+      }
+      return;
+    }
+
+    if (on) addExportOverlay(id);
+    else removeExportOverlay(id);
+
+    // Keep NWS vector polygons in sync for alerts
+    if (id === "alerts_nc") {
+      if (on) {
+        if ($("#showWarnings")) $("#showWarnings").checked = true;
+        drawAlertZones();
+      }
+    }
   }
 
   function initNowCoast() {
@@ -1225,14 +1382,17 @@
         saveLayoutLocal();
       });
       if (cb.checked) {
-        setTimeout(function () { toggleNcLayer(cb.dataset.nc, true); }, 500);
+        (function (id) {
+          setTimeout(function () { toggleNcLayer(id, true); }, 600);
+        })(cb.dataset.nc);
       }
     });
-    const play = $("#radarPlayBtn");
-    const prev = $("#radarPrevBtn");
-    const next = $("#radarNextBtn");
-    const refr = $("#radarRefreshBtn");
-    const opac = $("#radarOpacity");
+
+    var play = $("#radarPlayBtn");
+    var prev = $("#radarPrevBtn");
+    var next = $("#radarNextBtn");
+    var refr = $("#radarRefreshBtn");
+    var opac = $("#radarOpacity");
     if (play) play.onclick = function () {
       radarState.playing = !radarState.playing;
       play.textContent = radarState.playing ? "⏸" : "▶";
@@ -1248,61 +1408,17 @@
       showRadarFrame();
     };
     if (opac) opac.oninput = function () {
-      if (radarState.layer) radarState.layer.setOpacity((+opac.value) / 100);
+      var v = (+opac.value) / 100;
+      if (radarState.layer) radarState.layer.setOpacity(v);
     };
-    if (refr) refr.onclick = function () { startRadar(); };
+    if (refr) refr.onclick = function () {
+      var sat = $('input[data-nc="satellite"]');
+      startRadar(sat && sat.checked && (!$('input[data-nc="radar"]') || !$('input[data-nc="radar"]').checked) ? "satellite" : "radar");
+    };
   }
 
-  function toggleNcLayer(id, on) {
-    if (id === "radar") {
-      const box = $("#radarControls");
-      if (box) box.classList.toggle("hidden", !on);
-      if (on) startRadar("radar");
-      else stopRadar();
-      return;
-    }
-    if (id === "satellite") {
-      if (on) startRadar("satellite");
-      else if (!$('input[data-nc="radar"]') || !$('input[data-nc="radar"]').checked) stopRadar();
-      else startRadar("radar");
-      return;
-    }
-    if (id === "precip_amt") {
-      // RainViewer radar already shows precip; treat as radar alias
-      if (on) {
-        const r = $('input[data-nc="radar"]');
-        if (r && !r.checked) { r.checked = true; startRadar("radar"); }
-        toast("Precipitation shown via radar mosaic", 2000);
-      }
-      return;
-    }
-    if (id === "alerts_nc") {
-      if (on) {
-        if ($("#showWarnings") && !$("#showWarnings").checked) {
-          $("#showWarnings").checked = true;
-        }
-        drawAlertZones();
-      } else {
-        // only clear if showWarnings also off
-        if (!$("#showWarnings") || !$("#showWarnings").checked) {
-          if (nwsAlertLayer) nwsAlertLayer.clearLayers();
-        }
-      }
-      return;
-    }
-    // Remaining checkboxes: no Esri overlay (avoids zoom error tiles).
-    // Station markers already provide water levels / currents / etc.
-    if (on) {
-      const tips = {
-        waterlevels_nc: "Water level stations are on the map (cyan markers)",
-        sfc_currents: "Current / PORTS stations are teal markers",
-        sst_nc: "Use station detail for water temperature",
-        tropical_nc: "Tropical alerts appear in NWS Coastal Alerts when active",
-        lightning: "Lightning density requires a paid feed — use radar for storms",
-        inland_flood: "Enable NWS alerts + flood warnings in the alerts list"
-      };
-      if (tips[id]) toast(tips[id], 2200);
-    }
+  function transparentGif() {
+    return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
   }
 
   function startRadar(mode) {
@@ -1355,9 +1471,7 @@
       maxNativeZoom: 7,
       maxZoom: 19,
       tileSize: 256,
-      errorTileUrl: transparentGif(),
-      // Never show broken provider tiles
-      crossOrigin: true
+      errorTileUrl: transparentGif()
     });
     radarState.layer.on("tileerror", function (ev) {
       if (ev.tile) {
