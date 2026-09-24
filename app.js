@@ -18,11 +18,14 @@
   function proxyUrls(url) {
     if (isCorsOkHost(url)) return [url];
     var u = encodeURIComponent(url);
-    return [
+    // r.jina.ai works for NDBC text files from browser (returns readable body)
+    var list = [
       url,
+      "https://r.jina.ai/" + url,
       "https://corsproxy.io/?" + u,
       "https://api.allorigins.win/raw?url=" + u
     ];
+    return list;
   }
 
   function corsFetch(url, opts) {
@@ -102,6 +105,23 @@
     el._t = setTimeout(function () { el.classList.add("hidden"); }, ms);
   }
 
+  function msToKt(ms) {
+    if (ms == null || ms === "" || isNaN(+ms)) return null;
+    return +ms * 1.94384;
+  }
+  function hpaToInHg(h) {
+    if (h == null || h === "" || isNaN(+h)) return null;
+    return +h / 33.8639;
+  }
+  function mToFt(m) {
+    if (m == null || m === "" || isNaN(+m)) return null;
+    return +m * 3.28084;
+  }
+  function degToCardinal(d) {
+    if (d == null || isNaN(+d)) return null;
+    var dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+    return dirs[Math.round(((+d) % 360) / 22.5) % 16];
+  }
   function cToF(c) {
     if (c == null || c === "" || isNaN(+c)) return null;
     return (+c * 9 / 5) + 32;
@@ -1854,14 +1874,14 @@
       "</div>" +
       '<div data-pane-content="obs">' +
         '<div class="meta-grid">' +
-          cell("Wind dir", b.wdir, "°") +
-          cell("Wind speed", b.wind, "m/s") +
-          cell("Gust", b.gst, "m/s") +
-          cell("Wave height", b.wvht, "m") +
+          cell("Wind dir", b.wdir != null ? ((degToCardinal(b.wdir) || "") + " (" + Math.round(+b.wdir) + "°)") : null, "") +
+          cell("Wind speed", b.wind != null ? msToKt(b.wind).toFixed(1) : null, "kts") +
+          cell("Gust", b.gst != null ? msToKt(b.gst).toFixed(1) : null, "kts") +
+          cell("Wave height", b.wvht != null ? mToFt(b.wvht).toFixed(1) : null, "ft") +
           cell("Dom period", b.dpd, "s") +
           cell("Avg period", b.apd, "s") +
           cell("Wave dir", b.mwd, "°") +
-          cell("Pressure", b.bar, "hPa") +
+          cell("Pressure", b.bar != null ? hpaToInHg(b.bar).toFixed(2) : null, "in") +
           cell("Air temp", fmtTempF(b.atmp), "°F") +
           cell("Water temp", fmtTempF(b.wtmp), "°F") +
           cell("Dew point", fmtTempF(b.dewp), "°F") +
@@ -1888,8 +1908,8 @@
         "</div>" +
       "</div>" +
       '<div data-pane-content="series" style="display:none">' +
-        '<div id="buoySeries_' + b.id + '" class="muted">Loading recent realtime file…</div>' +
-        '<div class="chart-box" style="margin-top:10px"><canvas id="buoyChart_' + b.id + '"></canvas></div>' +
+        '<div class="chart-box" style="margin-top:4px;height:120px"><canvas id="buoyChart_' + b.id + '"></canvas></div>' +
+        '<div id="buoySeries_' + b.id + '" class="muted">Loading previous observations…</div>' +
       "</div>" +
       '<div class="source-bar">' +
         "Source: NDBC · data embedded in this app from " +
@@ -1912,16 +1932,173 @@
     loadBuoyRealtimeSeries(b, win);
   }
 
+  function parseNdbcRealtimeText(text) {
+    // Strip jina markdown wrapper if present
+    if (text.indexOf("Markdown Content:") >= 0) {
+      text = text.split("Markdown Content:")[1] || text;
+    }
+    var lines = text.replace(/\r/g, "").split("\n");
+    var rows = [];
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i].trim();
+      if (!ln || ln.charAt(0) === "#") continue;
+      if (/^YY\b|^yr\b/i.test(ln)) continue;
+      var p = ln.split(/\s+/);
+      if (p.length < 12) continue;
+      // YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP DEWP VIS [PTDY] TIDE
+      function mm(x) {
+        if (x == null || x === "MM" || x === "999" || x === "99.0") return null;
+        var n = parseFloat(x);
+        return isNaN(n) ? null : n;
+      }
+      var yy = p[0], mo = p[1], dy = p[2], hh = p[3], mi = p[4];
+      // Support both 5-col time and older layouts
+      var off = 5;
+      if (String(yy).length === 4) {
+        // ok
+      } else {
+        continue;
+      }
+      rows.push({
+        time: yy + "-" + mo + "-" + dy + " " + hh + ":" + mi + " UTC",
+        wdir: mm(p[off]),
+        wspd: mm(p[off + 1]),
+        gst: mm(p[off + 2]),
+        wvht: mm(p[off + 3]),
+        dpd: mm(p[off + 4]),
+        apd: mm(p[off + 5]),
+        mwd: mm(p[off + 6]),
+        pres: mm(p[off + 7]),
+        atmp: mm(p[off + 8]),
+        wtmp: mm(p[off + 9]),
+        dewp: mm(p[off + 10]),
+        vis: mm(p[off + 11]),
+        // ptdy optional
+        tide: mm(p[p.length - 1])
+      });
+    }
+    return rows;
+  }
+
   function loadBuoyRealtimeSeries(b, win) {
     var box = win.querySelector("#buoySeries_" + b.id);
     if (!box) return;
-    // NDBC realtime2 has no CORS — use values already embedded in ndbc-latest.json
-    if (b.hasObs) {
-      box.innerHTML = "<strong>Latest observation</strong> from NDBC latest_obs (embedded)<br/>"
-        + (b.obsTime ? "<span class=\"mono\">" + b.obsTime + "</span>" : "");
-      return;
+    box.innerHTML = '<div class="muted">Loading previous observations from NDBC…</div>';
+
+    function renderRows(rows) {
+      if (!rows || !rows.length) {
+        box.innerHTML = '<div class="muted">No previous observations available for this station.</div>';
+        return;
+      }
+      // Newest first (realtime2 is usually newest first already)
+      var show = rows.slice(0, 120);
+      var html = '<div class="buoy-obs-meta">' + show.length + " recent observations · Imperial units · Source: NDBC realtime2/" + b.id + ".txt</div>";
+      html += '<div class="buoy-obs-scroll"><table class="buoy-obs-table"><thead><tr>'
+        + "<th>Time (UTC)</th><th>WDIR</th><th>WSPD<br/>kts</th><th>GST<br/>kts</th>"
+        + "<th>WVHT<br/>ft</th><th>DPD<br/>s</th><th>APD<br/>s</th><th>MWD</th>"
+        + "<th>PRES<br/>in</th><th>ATMP<br/>°F</th><th>WTMP<br/>°F</th><th>DEWP<br/>°F</th>"
+        + "<th>VIS<br/>nmi</th><th>TIDE<br/>ft</th>"
+        + "</tr></thead><tbody>";
+      show.forEach(function (r) {
+        function cell(v, digits) {
+          if (v == null) return "—";
+          return digits != null ? (+v).toFixed(digits) : String(v);
+        }
+        var card = degToCardinal(r.wdir);
+        var wdirStr = r.wdir != null ? (card ? card + " (" + Math.round(r.wdir) + "°)" : Math.round(r.wdir) + "°") : "—";
+        html += "<tr>"
+          + "<td class=\"mono\">" + r.time + "</td>"
+          + "<td>" + wdirStr + "</td>"
+          + "<td>" + cell(msToKt(r.wspd), 1) + "</td>"
+          + "<td>" + cell(msToKt(r.gst), 1) + "</td>"
+          + "<td>" + cell(mToFt(r.wvht), 1) + "</td>"
+          + "<td>" + cell(r.dpd, 0) + "</td>"
+          + "<td>" + cell(r.apd, 1) + "</td>"
+          + "<td>" + (r.mwd != null ? Math.round(r.mwd) + "°" : "—") + "</td>"
+          + "<td>" + cell(hpaToInHg(r.pres), 2) + "</td>"
+          + "<td>" + cell(cToF(r.atmp), 1) + "</td>"
+          + "<td>" + cell(cToF(r.wtmp), 1) + "</td>"
+          + "<td>" + cell(cToF(r.dewp), 1) + "</td>"
+          + "<td>" + cell(r.vis, 1) + "</td>"
+          + "<td>" + cell(r.tide, 2) + "</td>"
+          + "</tr>";
+      });
+      html += "</tbody></table></div>";
+      box.innerHTML = html;
+
+      // Optional sparkline if chart canvas exists
+      var canvas = win.querySelector("#buoyChart_" + b.id);
+      if (canvas && typeof Chart !== "undefined") {
+        var pts = show.slice().reverse().filter(function (r) { return r.wtmp != null || r.wspd != null; }).slice(-72);
+        if (pts.length) {
+          var useTemp = pts.some(function (r) { return r.wtmp != null; });
+          var chartKey = "buoy_rt_" + b.id;
+          if (chartInstances.has(chartKey)) {
+            try { chartInstances.get(chartKey).destroy(); } catch (e) {}
+          }
+          var chart = new Chart(canvas, {
+            type: "line",
+            data: {
+              labels: pts.map(function (r) { return r.time.slice(11, 16); }),
+              datasets: [{
+                label: useTemp ? "Water temp °F" : "Wind kts",
+                data: pts.map(function (r) {
+                  return useTemp ? cToF(r.wtmp) : msToKt(r.wspd);
+                }),
+                borderColor: "#fb923c",
+                backgroundColor: "rgba(251,146,60,0.12)",
+                fill: true, tension: 0.25, pointRadius: 0, borderWidth: 1.5
+              }]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: true, labels: { color: "#8b9bb4", font: { size: 11 } } } },
+              scales: {
+                x: { ticks: { color: "#5c6b82", maxTicksLimit: 8, font: { size: 9 } }, grid: { color: "rgba(255,255,255,0.04)" } },
+                y: { ticks: { color: "#5c6b82", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.06)" } }
+              }
+            }
+          });
+          chartInstances.set(chartKey, chart);
+        }
+      }
     }
-    box.textContent = "No recent series — station not reporting in latest_obs.";
+
+    var id = b.id;
+    // 1) same-origin series cache
+    // 2) NDBC realtime2 via jina / proxies
+    var urls = [
+      "data/ndbc-series/" + encodeURIComponent(id) + ".json",
+      "https://www.ndbc.noaa.gov/data/realtime2/" + encodeURIComponent(id) + ".txt"
+    ];
+
+    function tryLocal() {
+      return fetch(urls[0], { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("no local series");
+          return r.json();
+        })
+        .then(function (j) {
+          var rows = Array.isArray(j) ? j : (j.rows || j.observations || []);
+          if (!rows.length) throw new Error("empty");
+          renderRows(rows);
+        });
+    }
+
+    function tryLive() {
+      return corsText(urls[1]).then(function (txt) {
+        var rows = parseNdbcRealtimeText(txt);
+        if (!rows.length) throw new Error("parse0");
+        renderRows(rows);
+      });
+    }
+
+    tryLocal()
+      .catch(function () { return tryLive(); })
+      .catch(function () {
+        box.innerHTML = '<div class="muted">Previous observations could not be loaded (CORS). Live values above are from latest_obs.</div>'
+          + (b.hasObs ? '<div class="muted" style="margin-top:6px">Open the Official station page link for the full NDBC table.</div>' : "");
+      });
   }
 
   function openAlertWindow(a) {
