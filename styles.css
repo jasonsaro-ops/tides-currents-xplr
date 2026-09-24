@@ -681,3 +681,7 @@ button, input, select { font: inherit; color: inherit; }
   filter: saturate(0.35) brightness(0.55) contrast(1.05) hue-rotate(190deg);
 }
 /* Keep markers/overlays unaffected (they sit above tile pane) */
+
+.leaflet-tile-pane .tcx-tiles-imagery {
+  filter: saturate(0.15) contrast(1.05) brightness(0.85);
+}
