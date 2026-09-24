@@ -670,3 +670,14 @@ button, input, select { font: inherit; color: inherit; }
   background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 4px;
 }
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+
+/* Dark basemap: OSM tiles inverted for a key-free dark look at all zoom levels */
+.leaflet-tile-pane .tcx-tiles-dark {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.95);
+}
+/* Soften labels/roads after invert */
+.leaflet-tile-pane .tcx-tiles-ocean {
+  filter: saturate(0.35) brightness(0.55) contrast(1.05) hue-rotate(190deg);
+}
+/* Keep markers/overlays unaffected (they sit above tile pane) */

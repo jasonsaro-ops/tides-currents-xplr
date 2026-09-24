@@ -401,27 +401,32 @@
     map = L.map(mapEl, {
       center: [38.5, -77.0],
       zoom: 6,
+      minZoom: 3,
+      maxZoom: 18,
       zoomControl: false,
       attributionControl: false,
       preferCanvas: true
     });
 
-    // All basemaps are API-key-free. maxNativeZoom prevents Esri "Zoom Level Not Supported" tiles.
+    // API-key-free basemaps. Dark uses OSM (full zoom) — Esri dark gray only goes to z16 and
+    // paints "Zoom Level Not Supported" on missing tiles. Ocean uses OSM too past native range.
     basemapLayers = {
-      dark: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
-        maxNativeZoom: 16, maxZoom: 19, attribution: "Esri"
+      dark: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, subdomains: "abc", attribution: "© OpenStreetMap",
+        className: "tcx-tiles-dark"
       }),
       imagery: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-        maxNativeZoom: 19, maxZoom: 19, attribution: "Esri"
+        maxNativeZoom: 17, maxZoom: 19, attribution: "Esri"
       }),
       topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-        maxNativeZoom: 17, maxZoom: 19, subdomains: "abc", attribution: "OpenTopoMap"
+        maxNativeZoom: 15, maxZoom: 19, subdomains: "abc", attribution: "OpenTopoMap"
       }),
       streets: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxNativeZoom: 19, maxZoom: 19, subdomains: "abc", attribution: "© OpenStreetMap"
+        maxZoom: 19, subdomains: "abc", attribution: "© OpenStreetMap"
       }),
-      ocean: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}", {
-        maxNativeZoom: 13, maxZoom: 19, attribution: "Esri"
+      ocean: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, subdomains: "abc", attribution: "© OpenStreetMap",
+        className: "tcx-tiles-ocean"
       })
     };
     basemapLayers.dark.addTo(map);
@@ -1378,9 +1383,11 @@
     const op = ($("#radarOpacity") && +$("#radarOpacity").value) || 70;
     radarState.layer = L.tileLayer(f.url, {
       opacity: op / 100,
-      zIndex: 300,
-      maxNativeZoom: 12,
+      zIndex: 450,
+      maxNativeZoom: 7,
       maxZoom: 19,
+      tileSize: 256,
+      // transparent 1x1 gif — never show provider error tiles on the map
       errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
     }).addTo(map);
     const d = new Date(f.time * 1000);
