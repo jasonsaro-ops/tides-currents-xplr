@@ -31,3 +31,14 @@ Repo name: `tides-currents-xplr` · GitHub Pages on `main` root.
 ## Stack
 
 Leaflet · MarkerCluster · Chart.js · NOAA CO-OPS · NDBC · NWS · RainViewer · Nominatim (ZIP)
+
+
+## NDBC buoys (no CORS)
+
+Buoy locations and observations load from **same-origin** files:
+
+- `data/ndbc-stations.json` — full station catalog
+- `data/ndbc-latest.json` — catalog + latest observations
+
+GitHub Action `.github/workflows/ndbc-refresh.yml` refreshes these hourly.
+After first push, run the workflow once (**Actions → Refresh NDBC buoy data → Run workflow**) if markers are empty.

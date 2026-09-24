@@ -726,111 +726,136 @@
   }
 
   function loadBuoys() {
-    var catalogUrl = "https://www.ndbc.noaa.gov/activestations.xml";
-    var obsUrl = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt";
+    // Prefer same-origin data/ files (no CORS). GitHub Action refreshes ndbc-latest.json.
+    // Fallback: corsFetch proxies (often blocked from browser).
 
-    function parseActiveStationsXml(xmlText) {
-      var list = [];
-      var re = /<station\s+([^>]+)\s*\/?>/gi;
-      var m;
-      while ((m = re.exec(xmlText)) !== null) {
-        var attrs = m[1];
-        function attr(name) {
-          var am = new RegExp(name + '="([^"]*)"', "i").exec(attrs);
-          return am ? am[1] : "";
-        }
-        var id = attr("id");
-        var lat = parseFloat(attr("lat"));
-        var lon = parseFloat(attr("lon"));
-        if (!id || !isFinite(lat) || !isFinite(lon)) continue;
-        if (lat === 0 && lon === 0) continue;
-        list.push({
-          id: id, lat: lat, lng: lon, type: "buoy",
-          name: attr("name") || ("NDBC " + id),
-          owner: attr("owner") || "",
-          program: attr("pgm") || "",
-          stationType: attr("type") || "",
-          elev: attr("elev") || "",
-          hasMet: attr("met") === "y",
-          hasCurrents: attr("currents") === "y",
-          hasWaterQuality: attr("waterquality") === "y",
-          hasDart: attr("dart") === "y",
-          _fresh: false, hasObs: false
-        });
-      }
-      return list;
-    }
-
-    function parseLatestObs(text) {
-      var byId = {};
-      var lines = text.trim().split("\n");
-      var i = 0;
-      while (i < lines.length && (lines[i].charAt(0) === "#" || /^\s*(YY|yr|STN)/i.test(lines[i]))) i++;
-      function mm(x) {
-        if (x == null || x === "MM" || x === "999" || x === "99.0" || x === "9999.0") return null;
-        return x;
-      }
-      for (; i < lines.length; i++) {
-        var p = lines[i].trim().split(/\s+/);
-        if (p.length < 15) continue;
-        // STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE
-        var id = p[0];
-        byId[id] = {
-          lat: parseFloat(p[1]), lng: parseFloat(p[2]),
-          wdir: mm(p[8]), wind: mm(p[9]), gst: mm(p[10]),
-          wvht: mm(p[11]), dpd: mm(p[12]), apd: mm(p[13]), mwd: mm(p[14]),
-          bar: mm(p[15]), ptdy: mm(p[16]), atmp: mm(p[17]), wtmp: mm(p[18]),
-          dewp: mm(p[19]), vis: mm(p[20]), tide: mm(p[21]),
-          obsTime: p[3] + "-" + p[4] + "-" + p[5] + " " + p[6] + ":" + p[7] + " UTC",
-          hasObs: true, _fresh: true
+    function normalizeList(arr) {
+      return (arr || []).map(function (b) {
+        return {
+          id: String(b.id),
+          lat: +b.lat,
+          lng: +(b.lng != null ? b.lng : b.lon),
+          type: "buoy",
+          name: b.name || ("NDBC " + b.id),
+          owner: b.owner || "",
+          program: b.program || b.pgm || "",
+          stationType: b.stationType || b.type || "buoy",
+          elev: b.elev || "",
+          hasMet: !!b.hasMet,
+          hasCurrents: !!b.hasCurrents,
+          hasWaterQuality: !!b.hasWaterQuality,
+          hasDart: !!b.hasDart,
+          wdir: b.wdir, wind: b.wind, gst: b.gst,
+          wvht: b.wvht, dpd: b.dpd, apd: b.apd, mwd: b.mwd,
+          bar: b.bar, ptdy: b.ptdy, atmp: b.atmp, wtmp: b.wtmp,
+          dewp: b.dewp, vis: b.vis, tide: b.tide,
+          obsTime: b.obsTime || "",
+          hasObs: !!(b.hasObs || b.wtmp != null || b.wind != null || b.wvht != null),
+          _fresh: !!b._fresh || !!b.hasObs
         };
-      }
-      return byId;
+      }).filter(function (b) {
+        return b.id && isFinite(b.lat) && isFinite(b.lng) && !(b.lat === 0 && b.lng === 0);
+      });
     }
 
-    return Promise.all([
-      corsText(catalogUrl).catch(function () { return null; }),
-      corsText(obsUrl).catch(function () { return null; })
-    ]).then(function (pair) {
-      var catalog = pair[0] ? parseActiveStationsXml(pair[0]) : [];
-      var obsMap = pair[1] ? parseLatestObs(pair[1]) : {};
-
-      if (!catalog.length && pair[1]) {
-        Object.keys(obsMap).forEach(function (id) {
-          var o = obsMap[id];
-          if (!isFinite(o.lat) || !isFinite(o.lng)) return;
-          catalog.push({
-            id: id, lat: o.lat, lng: o.lng, type: "buoy",
-            name: "NDBC " + id, owner: "", program: "", stationType: "buoy",
-            hasMet: true, hasCurrents: false, hasWaterQuality: false, hasDart: false
-          });
-        });
-      }
-
-      catalog.forEach(function (b) {
-        var o = obsMap[b.id];
-        if (o) {
-          Object.keys(o).forEach(function (k) {
-            if (k !== "lat" && k !== "lng") b[k] = o[k];
-          });
-          // prefer catalog lat/lng; fill if missing
-          if (!b.lat) b.lat = o.lat;
-          if (!b.lng) b.lng = o.lng;
-          b.hasObs = true;
-          b._fresh = true;
-        }
-      });
-
-      buoyStations = catalog.filter(function (b) { return isFinite(b.lat) && isFinite(b.lng); });
+    function applyList(list, label) {
+      buoyStations = list;
       renderBuoys();
-      var withObs = buoyStations.filter(function (b) { return b.hasObs; }).length;
-      toast(buoyStations.length + " NDBC stations (" + withObs + " live)", 2400);
-      if ($("#buoyCount")) $("#buoyCount").textContent = buoyStations.length.toLocaleString();
-    }).catch(function (e) {
-      console.error("loadBuoys", e);
-      toast("NDBC load failed — try soft refresh");
-      if ($("#buoyCount")) $("#buoyCount").textContent = "—";
-    });
+      var withObs = list.filter(function (b) { return b.hasObs; }).length;
+      if ($("#buoyCount")) $("#buoyCount").textContent = list.length.toLocaleString();
+      toast(list.length + " NDBC stations" + (withObs ? " (" + withObs + " with obs)" : "") + (label ? " · " + label : ""), 2600);
+    }
+
+    // 1) same-origin latest (stations + obs merged)
+    return fetch("data/ndbc-latest.json", { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("no local latest");
+        return r.json();
+      })
+      .then(function (j) {
+        var list = normalizeList(j.stations || j);
+        if (!list.length) throw new Error("empty local");
+        applyList(list, "local cache");
+      })
+      .catch(function () {
+        // 2) same-origin catalog only
+        return fetch("data/ndbc-stations.json", { cache: "no-store" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("no local stations");
+            return r.json();
+          })
+          .then(function (j) {
+            var list = normalizeList(j.stations || j);
+            if (!list.length) throw new Error("empty stations");
+            applyList(list, "catalog");
+          });
+      })
+      .catch(function () {
+        // 3) last resort: proxied live NDBC (often blocked)
+        return Promise.all([
+          corsText("https://www.ndbc.noaa.gov/activestations.xml").catch(function () { return null; }),
+          corsText("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt").catch(function () { return null; })
+        ]).then(function (pair) {
+          var xml = pair[0];
+          var obsText = pair[1];
+          var catalog = [];
+          if (xml) {
+            var re = /<station\s+([^>]+)\s*\/?>/gi, m;
+            while ((m = re.exec(xml)) !== null) {
+              var attrs = m[1];
+              function attr(name) {
+                var am = new RegExp(name + '="([^"]*)"', "i").exec(attrs);
+                return am ? am[1] : "";
+              }
+              var id = attr("id");
+              var lat = parseFloat(attr("lat"));
+              var lon = parseFloat(attr("lon"));
+              if (!id || !isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) continue;
+              catalog.push({
+                id: id, lat: lat, lng: lon, name: attr("name") || ("NDBC " + id),
+                owner: attr("owner"), program: attr("pgm"), stationType: attr("type"),
+                hasMet: attr("met") === "y", type: "buoy"
+              });
+            }
+          }
+          var obsMap = {};
+          if (obsText) {
+            var lines = obsText.trim().split("\n");
+            var i = 0;
+            while (i < lines.length && (lines[i].charAt(0) === "#" || /STN|YY|text/i.test(lines[i]))) i++;
+            function mm(x) {
+              return (!x || x === "MM" || x === "999") ? null : x;
+            }
+            for (; i < lines.length; i++) {
+              var p = lines[i].trim().split(/\s+/);
+              if (p.length < 15) continue;
+              obsMap[p[0]] = {
+                wdir: mm(p[8]), wind: mm(p[9]), gst: mm(p[10]), wvht: mm(p[11]),
+                dpd: mm(p[12]), apd: mm(p[13]), mwd: mm(p[14]), bar: mm(p[15]),
+                atmp: mm(p[17]), wtmp: mm(p[18]), dewp: mm(p[19]), vis: mm(p[20]),
+                tide: mm(p[21]),
+                obsTime: p[3] + "-" + p[4] + "-" + p[5] + " " + p[6] + ":" + p[7] + " UTC",
+                hasObs: true, _fresh: true
+              };
+              if (!catalog.length) {
+                catalog.push({ id: p[0], lat: +p[1], lng: +p[2], name: "NDBC " + p[0], type: "buoy" });
+              }
+            }
+          }
+          catalog.forEach(function (b) {
+            var o = obsMap[b.id];
+            if (o) Object.keys(o).forEach(function (k) { b[k] = o[k]; });
+          });
+          var list = normalizeList(catalog);
+          if (!list.length) throw new Error("proxy empty");
+          applyList(list, "live proxy");
+        });
+      })
+      .catch(function (e) {
+        console.error("loadBuoys", e);
+        toast("NDBC unavailable — ensure data/ndbc-latest.json is in the repo");
+        if ($("#buoyCount")) $("#buoyCount").textContent = "—";
+      });
   }
 
   function loadNwsAlerts() {
