@@ -102,6 +102,15 @@
     el._t = setTimeout(function () { el.classList.add("hidden"); }, ms);
   }
 
+  function cToF(c) {
+    if (c == null || c === "" || isNaN(+c)) return null;
+    return (+c * 9 / 5) + 32;
+  }
+  function fmtTempF(c) {
+    var f = cToF(c);
+    return f == null ? null : f.toFixed(0);
+  }
+
   function fmtNum(n, d) {
     d = d == null ? 2 : d;
     if (n == null || isNaN(+n)) return "—";
@@ -642,14 +651,14 @@
     });
     list.forEach(function (b) {
       var label = "";
-      if (product === "water_temperature" && b.wtmp != null) label = (+b.wtmp).toFixed(0) + "°C";
-      else if (product === "air_temperature" && b.atmp != null) label = (+b.atmp).toFixed(0) + "°C";
+      if (product === "water_temperature" && b.wtmp != null) label = fmtTempF(b.wtmp) + "°F";
+      else if (product === "air_temperature" && b.atmp != null) label = fmtTempF(b.atmp) + "°F";
       else if (product === "wind" && b.wind != null) label = b.wind + "m/s";
       else if (product === "currents" && b.wind != null) label = ""; // NDBC has no current speed typically
       var m = L.marker([b.lat, b.lng], { icon: markerIcon("buoy", b._fresh, label) });
       var tip = "<strong>" + (b.name || b.id) + "</strong><br/>NDBC buoy";
-      if (b.wtmp != null) tip += "<br/>Water " + b.wtmp + " °C";
-      if (b.atmp != null) tip += "<br/>Air " + b.atmp + " °C";
+      if (b.wtmp != null) tip += "<br/>Water " + fmtTempF(b.wtmp) + " °F";
+      if (b.atmp != null) tip += "<br/>Air " + fmtTempF(b.atmp) + " °F";
       if (b.wind != null) tip += "<br/>Wind " + b.wind + " m/s";
       if (b.wvht != null) tip += "<br/>Wave " + b.wvht + " m";
       m.bindTooltip(tip, { direction: "top", offset: [0, -8] });
@@ -1003,7 +1012,7 @@
   }
 
   function loadNwsAlerts() {
-    return fetch("https://api.weather.gov/alerts/active?event=Coastal%20Flood%20Warning,Coastal%20Flood%20Watch,Coastal%20Flood%20Advisory,Flood%20Warning,Flood%20Watch")
+    return fetch("https://api.weather.gov/alerts/active?status=actual&message_type=alert&limit=150")
       .then(function (r) {
         if (!r.ok) throw new Error("nws " + r.status);
         return r.json();
@@ -1020,6 +1029,9 @@
             onset: f.properties && f.properties.onset,
             ends: f.properties && f.properties.ends,
             desc: (f.properties && f.properties.description) || "",
+            instruction: (f.properties && f.properties.instruction) || "",
+            urgency: (f.properties && f.properties.urgency) || "",
+            sender: (f.properties && f.properties.senderName) || "",
             url: (f.properties && f.properties["@id"]) || f.id,
             geometry: f.geometry
           };
@@ -1050,8 +1062,11 @@
         const layer = L.geoJSON(a.geometry, {
           style: { color: "#ff4438", weight: 1, fillOpacity: 0.12, fillColor: "#ff4438" }
         });
-        layer.bindTooltip(a.event + (a.area ? " — " + a.area : ""));
-        layer.on("click", function () { openAlertWindow(a); });
+        layer.bindTooltip(a.event + (a.area ? " — " + a.area : ""), { sticky: true });
+        layer.on("click", function (e) {
+          if (e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+          openAlertWindow(a);
+        });
         nwsAlertLayer.addLayer(layer);
       } catch (e) {}
     });
@@ -1526,7 +1541,7 @@
           var parts = [];
           if (s.wvht != null) parts.push("Hs " + s.wvht + " m");
           if (s.wind != null) parts.push("Wind " + s.wind + " kn");
-          if (s.wtmp != null) parts.push("SST " + s.wtmp + " °C");
+          if (s.wtmp != null) parts.push("SST " + fmtTempF(s.wtmp) + " °F");
           val = parts.join(" · ");
         }
         body += '<div class="cat-row" data-sid="' + s.id + '" data-buoy="' + (isBuoy ? "1" : "0") + '">'
@@ -1598,11 +1613,31 @@
     };
   }
 
+
   function initLegendClicks() {
+    var list = $("#legendList");
+    if (!list) return;
+    var panel = list.closest(".panel") || list.parentElement;
+    var expand = document.getElementById("legendExpand");
+    if (!expand && panel) {
+      expand = document.createElement("div");
+      expand.id = "legendExpand";
+      expand.className = "legend-expand hidden";
+      panel.appendChild(expand);
+    }
     $$(".legend-item").forEach(function (li) {
       function go() {
         var cat = li.getAttribute("data-legend");
-        if (cat) openCategoryWindow(cat);
+        if (!cat || !expand) return;
+        // toggle if same category
+        if (expand.dataset.cat === cat && !expand.classList.contains("hidden")) {
+          expand.classList.add("hidden");
+          expand.dataset.cat = "";
+          return;
+        }
+        expand.dataset.cat = cat;
+        expand.classList.remove("hidden");
+        renderLegendExpand(cat, expand);
       }
       li.addEventListener("click", go);
       li.addEventListener("keydown", function (e) {
@@ -1611,67 +1646,56 @@
     });
   }
 
-    function openStationWindow(s) {
-    const key = s.id;
-    const t = stationType(s);
-    const products = (s.products || []).join(", ") || "—";
-    const body =
-      '<div class="float-tabs">' +
-        '<button type="button" class="float-tab active" data-pane="overview">Overview</button>' +
-        '<button type="button" class="float-tab" data-pane="levels">Water level</button>' +
-        '<button type="button" class="float-tab" data-pane="pred">Predictions</button>' +
-        '<button type="button" class="float-tab" data-pane="meta">Metadata</button>' +
-      "</div>" +
-      '<div data-pane-content="overview">' +
-        '<div class="meta-grid">' +
-          '<div class="meta-card"><div class="ml">Station ID</div><div class="mv mono">' + s.id + "</div></div>" +
-          '<div class="meta-card"><div class="ml">State</div><div class="mv">' + (s.state || "—") + "</div></div>" +
-          '<div class="meta-card"><div class="ml">Latitude</div><div class="mv mono">' + fmtNum(s.lat, 5) + "</div></div>" +
-          '<div class="meta-card"><div class="ml">Longitude</div><div class="mv mono">' + fmtNum(s.lng, 5) + "</div></div>" +
-          '<div class="meta-card"><div class="ml">Type</div><div class="mv">' + t + "</div></div>" +
-          '<div class="meta-card"><div class="ml">PORTS®</div><div class="mv">' + (s.ports ? "Yes" : "No") + "</div></div>" +
-        "</div>" +
-        '<div class="btn-row">' +
-          '<button type="button" class="action-btn primary" data-act="watch">★ Add to watch</button>' +
-          '<button type="button" class="action-btn" data-act="center">Center map</button>' +
-          '<a class="action-btn" href="https://tidesandcurrents.noaa.gov/stationhome.html?id=' + s.id + '" target="_blank" rel="noopener">NOAA station ↗</a>' +
-        "</div>" +
-        '<div id="liveVals_' + s.id + '" class="meta-grid"><div class="meta-card skeleton" style="height:48px;grid-column:1/-1"></div></div>' +
-      "</div>" +
-      '<div data-pane-content="levels" style="display:none">' +
-        '<div class="chart-box"><canvas id="chart_wl_' + s.id + '"></canvas></div>' +
-        '<div class="muted">Last 48 h water level (MLLW, English units)</div>' +
-      "</div>" +
-      '<div data-pane-content="pred" style="display:none">' +
-        '<div class="chart-box"><canvas id="chart_pred_' + s.id + '"></canvas></div>' +
-        '<div class="muted">Tide predictions (next 48 h)</div>' +
-      "</div>" +
-      '<div data-pane-content="meta" style="display:none">' +
-        '<div class="meta-card" style="margin-bottom:10px">' +
-          '<div class="ml">Available products</div>' +
-          '<div class="mv" style="font-size:12px;font-weight:400;margin-top:6px">' + products + "</div>" +
-        "</div>" +
-        '<div class="source-bar">' +
-          'Metadata: <a href="' + MDAPI + "/stations/" + s.id + '.json" target="_blank" rel="noopener">CO-OPS MDAPI</a><br/>' +
-          "Observations: NOAA Data API" +
-        "</div>" +
-      "</div>" +
-      '<div class="source-bar">' +
-        'Source: NOAA CO-OPS · <a href="https://tidesandcurrents.noaa.gov/" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a>' +
-      "</div>";
-
-    const win = openFloat(key, s.name || s.id, "Station " + s.id + " · " + (s.state || ""), body, {
-      edgeClass: "edge-" + t
+  function renderLegendExpand(cat, expand) {
+    var titles = {
+      wl: "Water level stations", curr: "Currents / PORTS®", met: "Meteorological",
+      buoy: "NDBC buoys", fresh: "Fresh data", flood: "Flood / coastal alerts"
+    };
+    var html = '<div class="legend-expand-head"><strong>' + (titles[cat] || cat) + '</strong>'
+      + '<button type="button" class="icon-btn" id="legendExpandClose" title="Close">×</button></div>';
+    if (cat === "flood") {
+      var alerts = nwsAlerts.slice(0, 40);
+      html += '<div class="legend-expand-stats">' + alerts.length + " active (showing up to 40)</div>";
+      html += '<div class="cat-list">';
+      alerts.forEach(function (a) {
+        html += '<div class="cat-row" data-alert-id="' + String(a.id).replace(/"/g, "") + '">'
+          + '<div class="cn">' + (a.event || "Alert") + '</div>'
+          + '<div class="cm">' + (a.area || "") + '</div></div>';
+      });
+      html += "</div>";
+    } else {
+      var list = stationsByCategory(cat);
+      html += '<div class="legend-expand-stats">' + list.length + " items</div>";
+      html += '<div class="cat-list">';
+      list.slice(0, 50).forEach(function (s) {
+        var isBuoy = s.type === "buoy" || cat === "buoy";
+        html += '<div class="cat-row" data-sid="' + s.id + '" data-buoy="' + (isBuoy ? "1" : "0") + '">'
+          + '<div class="cn">' + (s.name || s.id) + '</div>'
+          + '<div class="cm">' + s.id + (s.state ? " · " + s.state : "") + '</div></div>';
+      });
+      html += "</div>";
+    }
+    expand.innerHTML = html;
+    var close = expand.querySelector("#legendExpandClose");
+    if (close) close.onclick = function () { expand.classList.add("hidden"); };
+    expand.querySelectorAll(".cat-row[data-alert-id]").forEach(function (row) {
+      row.onclick = function () {
+        var a = nwsAlerts.find(function (x) { return x.id === row.getAttribute("data-alert-id"); });
+        if (a) openAlertWindow(a);
+      };
     });
-    if (!win) return;
-    const watchBtn = win.querySelector('[data-act="watch"]');
-    const centerBtn = win.querySelector('[data-act="center"]');
-    if (watchBtn) watchBtn.onclick = function () { addWatch(s); toast("Added to watch"); };
-    if (centerBtn) centerBtn.onclick = function () { if (map) map.setView([s.lat, s.lng], 12); };
-
-    loadStationLive(s, win);
-    loadStationChart(s, "water_level", "chart_wl_" + s.id, key + "_wl");
-    loadStationChart(s, "predictions", "chart_pred_" + s.id, key + "_pred");
+    expand.querySelectorAll(".cat-row[data-sid]").forEach(function (row) {
+      row.onclick = function () {
+        var id = row.getAttribute("data-sid");
+        if (row.getAttribute("data-buoy") === "1") {
+          var b = buoyStations.find(function (x) { return x.id === id; });
+          if (b) openBuoyWindow(b);
+        } else {
+          var s = stations.find(function (x) { return x.id === id; });
+          if (s) openStationWindow(s);
+        }
+      };
+    });
   }
 
   function loadStationLive(s, win) {
@@ -1838,9 +1862,9 @@
           cell("Avg period", b.apd, "s") +
           cell("Wave dir", b.mwd, "°") +
           cell("Pressure", b.bar, "hPa") +
-          cell("Air temp", b.atmp, "°C") +
-          cell("Water temp", b.wtmp, "°C") +
-          cell("Dew point", b.dewp, "°C") +
+          cell("Air temp", fmtTempF(b.atmp), "°F") +
+          cell("Water temp", fmtTempF(b.wtmp), "°F") +
+          cell("Dew point", fmtTempF(b.dewp), "°F") +
           cell("Visibility", b.vis, "nmi") +
           cell("Tide", b.tide, "ft") +
           cell("Observed", b.obsTime || (b.hasObs ? "yes" : "Station not in latest_obs (not currently reporting)"), "") +
@@ -1901,27 +1925,58 @@
   }
 
   function openAlertWindow(a) {
-    const key = "alert_" + a.id;
-    const sev = (a.severity || "").toLowerCase();
-    let edge = "edge-advisory";
+    var key = "alert_" + a.id;
+    var sev = (a.severity || "").toLowerCase();
+    var edge = "edge-advisory";
     if (sev.indexOf("extreme") >= 0 || sev.indexOf("severe") >= 0) edge = "edge-alert";
     else if (sev.indexOf("moderate") >= 0) edge = "edge-watch";
 
-    const body =
-      '<div class="meta-grid">' +
-        '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Event</div><div class="mv">' + a.event + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Severity</div><div class="mv">' + (a.severity || "—") + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Area</div><div class="mv" style="font-size:12px">' + (a.area || "—") + "</div></div>" +
+    function esc(s) {
+      return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function buildBody(full) {
+      var headline = full.headline || a.headline || "";
+      var desc = full.description || a.desc || "";
+      var instr = full.instruction || "";
+      var onset = full.onset || a.onset || "";
+      var ends = full.ends || a.ends || "";
+      var sender = full.senderName || a.sender || "";
+      return '<div class="meta-grid">' +
+        '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Event</div><div class="mv">' + esc(a.event || full.event) + "</div></div>" +
+        '<div class="meta-card"><div class="ml">Severity</div><div class="mv">' + esc(a.severity || full.severity || "—") + "</div></div>" +
+        '<div class="meta-card"><div class="ml">Urgency</div><div class="mv">' + esc(full.urgency || a.urgency || "—") + "</div></div>" +
+        '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Area</div><div class="mv" style="font-size:12px">' + esc(a.area || full.areaDesc || "—") + "</div></div>" +
+        (onset ? '<div class="meta-card"><div class="ml">Onset</div><div class="mv" style="font-size:11px">' + esc(onset) + "</div></div>" : "") +
+        (ends ? '<div class="meta-card"><div class="ml">Ends</div><div class="mv" style="font-size:11px">' + esc(ends) + "</div></div>" : "") +
+        (sender ? '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Issued by</div><div class="mv" style="font-size:11px">' + esc(sender) + "</div></div>" : "") +
       "</div>" +
-      '<p style="font-size:12px;color:var(--text-muted);margin:10px 0;white-space:pre-wrap;max-height:180px;overflow:auto">' +
-        (a.headline || a.desc || "").slice(0, 800) +
-      "</p>" +
-      '<div class="source-bar">Source: <a href="https://api.weather.gov/" target="_blank" rel="noopener">NWS Alerts API</a>' +
-        (a.url ? ' · <a href="' + a.url + '" target="_blank" rel="noopener">Full alert</a>' : "") +
+      (headline ? '<p class="alert-headline">' + esc(headline) + "</p>" : "") +
+      (desc ? '<div class="alert-body"><div class="ml">Description</div><pre class="alert-pre">' + esc(desc) + "</pre></div>" : "") +
+      (instr ? '<div class="alert-body"><div class="ml">Instructions</div><pre class="alert-pre">' + esc(instr) + "</pre></div>" : "") +
+      '<div class="source-bar">Source: NWS Alerts API' +
+        (a.url ? ' · <a href="' + a.url + '" target="_blank" rel="noopener">api.weather.gov</a>' : "") +
       "</div>";
+    }
 
-    openFloat(key, a.event, a.severity || "Alert", body, { width: 420, edgeClass: edge });
+    var win = openFloat(key, a.event || "Alert", a.severity || "Alert", buildBody({}), {
+      width: 460, edgeClass: edge
+    });
+
+    // Load full alert JSON from NWS (CORS-enabled) when we have an API URL
+    var apiUrl = a.url || "";
+    if (apiUrl && /api\.weather\.gov\/alerts/.test(apiUrl) && win) {
+      var bodyEl = win.querySelector(".float-body") || win;
+      fetch(apiUrl, { headers: { Accept: "application/geo+json, application/json" }, cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          var props = (j && j.properties) ? j.properties : (j || {});
+          var host = win.querySelector(".float-body");
+          if (host) host.innerHTML = buildBody(props);
+        })
+        .catch(function () {});
+    }
   }
+
 
   // ---------- RADAR ----------
   // ---------- nowCOAST-style overlays via ArcGIS *export* (bbox) ----------
@@ -1958,8 +2013,8 @@
     },
     lightning: {
       url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer",
-      opacity: 0.35,
-      label: "Hazard zones (lightning proxy)"
+      opacity: 0.4,
+      label: "Watches & warnings (click map for details)"
     },
     precip_amt: {
       url: "https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer",
@@ -1967,9 +2022,7 @@
       label: "RFC precipitation"
     },
     inland_flood: {
-      url: "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
-      opacity: 0.7,
-      label: "Flood-related gauges"
+      special: "inland_flood"
     },
     radar: {
       special: "radar"
@@ -2055,10 +2108,129 @@
     delete ncOverlays[id];
   }
 
+
+  function identifyNcLayer(latlng) {
+    // Query active ArcGIS overlays under click for attributes
+    var ids = Object.keys(ncOverlays);
+    if (!ids.length || !map) return Promise.resolve([]);
+    var size = map.getSize();
+    var b = map.getBounds();
+    var extent = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+    var results = [];
+    var chain = Promise.resolve();
+    ids.forEach(function (id) {
+      var def = NC_SERVICES[id];
+      if (!def || !def.url) return;
+      chain = chain.then(function () {
+        var url = def.url + "/identify"
+          + "?geometry=" + encodeURIComponent(latlng.lng + "," + latlng.lat)
+          + "&geometryType=esriGeometryPoint&sr=4326"
+          + "&layers=all&tolerance=8"
+          + "&mapExtent=" + encodeURIComponent(extent)
+          + "&imageDisplay=" + size.x + "," + size.y + ",96"
+          + "&returnGeometry=false&f=json";
+        return fetch(url, { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) {
+            if (!j || !j.results) return;
+            j.results.forEach(function (res) {
+              results.push({ layerId: id, label: def.label || id, result: res });
+            });
+          })
+          .catch(function () {});
+      });
+    });
+    return chain.then(function () { return results; });
+  }
+
+  function openIdentifyWindow(latlng, results) {
+    if (!results.length) {
+      // Fallback: nearest CO-OPS station or buoy
+      var nearest = null, nd = 1e9;
+      getFilteredStations().forEach(function (s) {
+        var d = haversineKm(latlng.lat, latlng.lng, s.lat, s.lng);
+        if (d < nd) { nd = d; nearest = s; }
+      });
+      buoyStations.forEach(function (b) {
+        var d = haversineKm(latlng.lat, latlng.lng, b.lat, b.lng);
+        if (d < nd) { nd = d; nearest = b; }
+      });
+      if (nearest && nd < 25) {
+        if (nearest.type === "buoy") openBuoyWindow(nearest);
+        else openStationWindow(nearest);
+        return;
+      }
+      toast("No feature under click");
+      return;
+    }
+    var r0 = results[0];
+    var attrs = (r0.result && r0.result.attributes) || {};
+    var rows = Object.keys(attrs).filter(function (k) {
+      return attrs[k] != null && String(attrs[k]).trim() !== "" && !/^objectid$/i.test(k) && !/^shape/i.test(k);
+    }).slice(0, 24);
+    var body = '<div class="meta-grid">';
+    rows.forEach(function (k) {
+      body += '<div class="meta-card"><div class="ml">' + k + '</div><div class="mv" style="font-size:12px">' + attrs[k] + "</div></div>";
+    });
+    body += "</div>";
+    body += '<div class="source-bar">' + (r0.label || "Layer") + " · click value from map service</div>";
+    openFloat("identify_" + Date.now(), r0.result.value || r0.result.layerName || "Feature", r0.label || "Overlay", body, {
+      width: 440, edgeClass: "edge-wl"
+    });
+  }
+
+  function initNcMapClick() {
+    if (!map || map._ncClickBound) return;
+    map._ncClickBound = true;
+    map.on("click", function (e) {
+      // Don't steal clicks from markers
+      if (e.originalEvent && e.originalEvent.target && e.originalEvent.target.closest && e.originalEvent.target.closest(".leaflet-marker-icon")) return;
+      var active = Object.keys(ncOverlays);
+      var satOn = $('input[data-nc="satellite"]') && $('input[data-nc="satellite"]').checked;
+      var radOn = $('input[data-nc="radar"]') && $('input[data-nc="radar"]').checked;
+      if (!active.length && !satOn && !radOn) return;
+      if (!active.length) return;
+      toast("Querying layer…", 900);
+      identifyNcLayer(e.latlng).then(function (results) {
+        openIdentifyWindow(e.latlng, results);
+      });
+    });
+  }
+
   function toggleNcLayer(id, on) {
     var def = NC_SERVICES[id];
     if (!def) return;
 
+    if (def.special === "inland_flood") {
+      if (on) {
+        if ($("#showWarnings")) $("#showWarnings").checked = true;
+        // Focus flood-related alerts
+        loadNwsAlerts().then(function () {
+          // Filter drawn polygons to flood events
+          if (nwsAlertLayer) {
+            nwsAlertLayer.clearLayers();
+            nwsAlerts.filter(function (a) {
+              return /flood|flash flood|coastal flood|hydrologic/i.test(a.event || "");
+            }).forEach(function (a) {
+              if (!a.geometry) return;
+              try {
+                var layer = L.geoJSON(a.geometry, {
+                  style: { color: "#ef4444", weight: 2, fillColor: "#ef4444", fillOpacity: 0.25 }
+                });
+                layer.bindTooltip(a.event);
+                layer.on("click", function () { openAlertWindow(a); });
+                nwsAlertLayer.addLayer(layer);
+              } catch (e) {}
+            });
+          }
+          toast("Inland / coastal flood alerts on map — click polygons", 2500);
+        });
+      } else {
+        if ($("#showWarnings") && $("#showWarnings").checked) drawAlertZones();
+        else if (nwsAlertLayer) nwsAlertLayer.clearLayers();
+      }
+      return;
+    }
     if (def.special === "tropical") {
       if (on) {
         if (!tropicalStorms.length) loadTropicalStorms();
@@ -2100,6 +2272,7 @@
   }
 
   function initNowCoast() {
+    initNcMapClick();
     $$("input[data-nc]").forEach(function (cb) {
       cb.addEventListener("change", function () {
         toggleNcLayer(cb.dataset.nc, cb.checked);

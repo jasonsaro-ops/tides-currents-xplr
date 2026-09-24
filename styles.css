@@ -757,3 +757,34 @@ button, input, select { font: inherit; color: inherit; }
   font-size: 14px;
   box-shadow: 0 0 12px color-mix(in srgb, var(--sc, #f97316) 50%, transparent);
 }
+
+.legend-expand {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.25);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.legend-expand.hidden { display: none; }
+.legend-expand-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px; font-size: 12px;
+}
+.legend-expand-stats { font-size: 10px; color: var(--text-dim); margin-bottom: 6px; }
+.alert-headline {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  margin: 10px 0 6px; line-height: 1.35;
+}
+.alert-body { margin: 8px 0; }
+.alert-body .ml { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 4px; }
+.alert-pre {
+  white-space: pre-wrap; word-break: break-word;
+  font-family: var(--mono); font-size: 11px; line-height: 1.45;
+  color: var(--text-muted);
+  max-height: 220px; overflow-y: auto;
+  margin: 0; padding: 8px;
+  background: rgba(0,0,0,0.25); border-radius: 6px;
+  border: 1px solid var(--border);
+}
