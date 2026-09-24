@@ -988,7 +988,200 @@
   }
 
   // ---------- STATION / BUOY / ALERT WINDOWS ----------
-  function openStationWindow(s) {
+  // ---------- LEGEND CATEGORY FLOATING WINDOWS ----------
+  function stationsByCategory(cat) {
+    if (cat === "buoy") return buoyStations.slice();
+    if (cat === "flood") return []; // alerts handled separately
+    if (cat === "fresh") {
+      return stations.filter(function (s) { return s._fresh; })
+        .concat(buoyStations.filter(function (b) { return b._fresh; }));
+    }
+    return stations.filter(function (s) {
+      var t = stationType(s);
+      if (cat === "wl") return t === "wl";
+      if (cat === "curr") return t === "curr";
+      if (cat === "met") return t === "met";
+      return false;
+    });
+  }
+
+  function openCategoryWindow(cat) {
+    var titles = {
+      wl: "Water level stations",
+      curr: "Currents / PORTS®",
+      met: "Meteorological stations",
+      buoy: "NDBC buoys",
+      fresh: "Fresh data",
+      flood: "Flood / coastal alerts"
+    };
+    var edges = {
+      wl: "edge-wl", curr: "edge-curr", met: "edge-met",
+      buoy: "edge-buoy", fresh: "edge-wl", flood: "edge-alert"
+    };
+    var sources = {
+      wl: "NOAA CO-OPS water level stations · tidesandcurrents.noaa.gov",
+      curr: "NOAA CO-OPS currents / PORTS® · tidesandcurrents.noaa.gov",
+      met: "NOAA CO-OPS meteorological sensors · tidesandcurrents.noaa.gov",
+      buoy: "NDBC latest_obs · ndbc.noaa.gov",
+      fresh: "Stations refreshed in the last soft-update cycle",
+      flood: "NWS Alerts API · api.weather.gov"
+    };
+    var key = "legend_" + cat;
+    var title = titles[cat] || cat;
+    var body = "";
+
+    if (cat === "flood") {
+      var alerts = nwsAlerts.slice();
+      body += '<div class="cat-stats">'
+        + '<div class="meta-card"><div class="ml">Active alerts</div><div class="mv accent">' + alerts.length + '</div></div>'
+        + '<div class="meta-card"><div class="ml">Source</div><div class="mv" style="font-size:11px">NWS</div></div>'
+        + '</div>';
+      if (!alerts.length) {
+        body += '<div class="empty-state">No active coastal / flood alerts</div>';
+      } else {
+        body += '<div class="cat-list">';
+        alerts.slice(0, 80).forEach(function (a) {
+          var sev = (a.severity || "").toLowerCase();
+          body += '<div class="cat-row" data-alert-id="' + a.id.replace(/"/g, "") + '">'
+            + '<div class="cn">' + (a.event || "Alert") + '</div>'
+            + '<div class="cm">' + (a.area || "") + " · " + (a.severity || "") + '</div>'
+            + '</div>';
+        });
+        body += '</div>';
+      }
+      body += '<div class="source-bar">' + sources.flood + '</div>';
+      var win = openFloat(key, title, alerts.length + " active", body, {
+        width: 420, edgeClass: edges.flood
+      });
+      if (win) {
+        win.querySelectorAll(".cat-row[data-alert-id]").forEach(function (row) {
+          row.onclick = function () {
+            var a = nwsAlerts.find(function (x) { return x.id === row.getAttribute("data-alert-id"); });
+            if (a) openAlertWindow(a);
+          };
+        });
+      }
+      return;
+    }
+
+    var list = stationsByCategory(cat);
+    // Prefer filtered view when state filter is set
+    var stFilter = ($("#stateFilter") && $("#stateFilter").value) || "";
+    if (stFilter && cat !== "buoy") {
+      list = list.filter(function (s) { return s.state === stFilter; });
+    }
+
+    body += '<div class="cat-stats">'
+      + '<div class="meta-card"><div class="ml">Count</div><div class="mv accent">' + list.length + '</div></div>'
+      + '<div class="meta-card"><div class="ml">Filter</div><div class="mv" style="font-size:11px">' + (stFilter || "All states") + '</div></div>'
+      + '</div>';
+    body += '<div class="btn-row">'
+      + '<button type="button" class="action-btn primary" data-act="filter-map">Show only this type on map</button>'
+      + '<button type="button" class="action-btn" data-act="fit">Fit bounds</button>'
+      + '</div>';
+
+    if (!list.length) {
+      body += '<div class="empty-state">No items in this category'
+        + (cat === "fresh" ? " (fresh markers appear after a soft refresh)" : "")
+        + '</div>';
+    } else {
+      body += '<div class="cat-list">';
+      list.slice(0, 120).forEach(function (s) {
+        var isBuoy = s.type === "buoy" || cat === "buoy";
+        var meta = isBuoy
+          ? (s.id + " · NDBC")
+          : (s.id + " · " + (s.state || "—") + " · " + stationType(s));
+        var val = "";
+        if (isBuoy) {
+          var parts = [];
+          if (s.wvht != null) parts.push("Hs " + s.wvht + " m");
+          if (s.wind != null) parts.push("Wind " + s.wind + " kn");
+          if (s.wtmp != null) parts.push("SST " + s.wtmp + " °C");
+          val = parts.join(" · ");
+        }
+        body += '<div class="cat-row" data-sid="' + s.id + '" data-buoy="' + (isBuoy ? "1" : "0") + '">'
+          + '<div class="cn">' + (s.name || s.id) + '</div>'
+          + '<div class="cm">' + meta + '</div>'
+          + (val ? '<div class="cv">' + val + '</div>' : '')
+          + '</div>';
+      });
+      if (list.length > 120) {
+        body += '<div class="muted" style="padding:8px">Showing 120 of ' + list.length + '</div>';
+      }
+      body += '</div>';
+    }
+    body += '<div class="source-bar">' + (sources[cat] || "") + '</div>';
+
+    var win = openFloat(key, title, list.length + " items", body, {
+      width: 440, edgeClass: edges[cat] || "edge-wl"
+    });
+    if (!win) return;
+
+    win.querySelectorAll(".cat-row[data-sid]").forEach(function (row) {
+      row.onclick = function () {
+        var id = row.getAttribute("data-sid");
+        var isBuoy = row.getAttribute("data-buoy") === "1";
+        if (isBuoy) {
+          var b = buoyStations.find(function (x) { return x.id === id; });
+          if (b) {
+            openBuoyWindow(b);
+            if (map) map.setView([b.lat, b.lng], Math.max(map.getZoom(), 9));
+          }
+        } else {
+          var s = stations.find(function (x) { return x.id === id; });
+          if (s) {
+            openStationWindow(s);
+            if (map) map.setView([s.lat, s.lng], Math.max(map.getZoom(), 10));
+          }
+        }
+      };
+    });
+
+    var fitBtn = win.querySelector('[data-act="fit"]');
+    if (fitBtn) fitBtn.onclick = function () {
+      if (!map || !list.length) return;
+      var pts = list.filter(function (s) { return s.lat && s.lng; })
+        .map(function (s) { return [s.lat, s.lng]; });
+      if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.1));
+    };
+
+    var filterBtn = win.querySelector('[data-act="filter-map"]');
+    if (filterBtn) filterBtn.onclick = function () {
+      if (cat === "buoy") {
+        if ($("#showBuoys")) $("#showBuoys").checked = true;
+        if ($("#showWaterLevels")) $("#showWaterLevels").checked = false;
+        if ($("#showCurrents")) $("#showCurrents").checked = false;
+        if ($("#typeFilter")) $("#typeFilter").value = "";
+      } else if (cat === "wl") {
+        if ($("#typeFilter")) $("#typeFilter").value = "waterlevels";
+        if ($("#showWaterLevels")) $("#showWaterLevels").checked = true;
+      } else if (cat === "curr") {
+        if ($("#typeFilter")) $("#typeFilter").value = "currents";
+        if ($("#showCurrents")) $("#showCurrents").checked = true;
+      } else if (cat === "met") {
+        if ($("#typeFilter")) $("#typeFilter").value = "met";
+      } else if (cat === "fresh") {
+        toast("Fresh markers pulse after each soft refresh");
+      }
+      applyFilters();
+      toast("Map filter applied");
+    };
+  }
+
+  function initLegendClicks() {
+    $$(".legend-item").forEach(function (li) {
+      function go() {
+        var cat = li.getAttribute("data-legend");
+        if (cat) openCategoryWindow(cat);
+      }
+      li.addEventListener("click", go);
+      li.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+      });
+    });
+  }
+
+    function openStationWindow(s) {
     const key = s.id;
     const t = stationType(s);
     const products = (s.products || []).join(", ") || "—";
@@ -1715,6 +1908,7 @@
       initPanels();
       initUI();
       initNowCoast();
+      initLegendClicks();
 
       const params = new URLSearchParams(location.search);
       const layoutUrl = params.get("layout");

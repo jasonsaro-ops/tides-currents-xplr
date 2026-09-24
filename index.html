@@ -166,13 +166,14 @@
             <header class="panel-head"><h2>Legend</h2></header>
             <div class="panel-body">
               <ul class="legend" id="legendList">
-                <li><span class="sw wl"></span> Water level</li>
-                <li><span class="sw curr"></span> Currents / PORTS</li>
-                <li><span class="sw met"></span> Meteorological</li>
-                <li><span class="sw buoy"></span> NDBC buoy</li>
-                <li><span class="sw pulse"></span> Fresh data</li>
-                <li><span class="sw flood"></span> Flood / alert</li>
+                <li class="legend-item" data-legend="wl" role="button" tabindex="0"><span class="sw wl"></span> Water level</li>
+                <li class="legend-item" data-legend="curr" role="button" tabindex="0"><span class="sw curr"></span> Currents / PORTS</li>
+                <li class="legend-item" data-legend="met" role="button" tabindex="0"><span class="sw met"></span> Meteorological</li>
+                <li class="legend-item" data-legend="buoy" role="button" tabindex="0"><span class="sw buoy"></span> NDBC buoy</li>
+                <li class="legend-item" data-legend="fresh" role="button" tabindex="0"><span class="sw pulse"></span> Fresh data</li>
+                <li class="legend-item" data-legend="flood" role="button" tabindex="0"><span class="sw flood"></span> Flood / alert</li>
               </ul>
+              <p class="legend-hint muted">Click a category to open its data</p>
             </div>
           </section>
 
