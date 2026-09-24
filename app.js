@@ -460,6 +460,10 @@
     window.addEventListener("resize", function () {
       if (map) map.invalidateSize(true);
     });
+    map.on("moveend", function () {
+      var product = ($("#productFilter") && $("#productFilter").value) || "none";
+      if (product !== "none") scheduleProductOverlay();
+    });
 
     const zi = $("#zoomInBtn");
     const zo = $("#zoomOutBtn");
@@ -489,11 +493,22 @@
     saveLayoutLocal();
   }
 
-  function markerIcon(type, fresh) {
-    const cls = "tcx-marker " + (type || "wl") + (fresh ? " fresh" : "");
+  function markerIcon(type, fresh, label) {
+    var cls = "tcx-marker " + (type || "wl") + (fresh ? " fresh" : "");
+    var html = '<div class="' + cls + '"></div>';
+    if (label != null && label !== "") {
+      html = '<div class="tcx-marker-wrap">' + html
+        + '<span class="tcx-marker-label">' + label + '</span></div>';
+      return L.divIcon({
+        className: "tcx-div-icon",
+        html: html,
+        iconSize: [40, 28],
+        iconAnchor: [8, 8]
+      });
+    }
     return L.divIcon({
-      className: "",
-      html: '<div class="' + cls + '"></div>',
+      className: "tcx-div-icon",
+      html: html,
       iconSize: [14, 14],
       iconAnchor: [7, 7]
     });
@@ -502,33 +517,57 @@
   function stationType(s) {
     if (s.type === "buoy") return "buoy";
     if (s.ports) return "curr";
-    const prods = s.products || [];
-    const hasCurr = prods.some(function (p) { return /current/i.test(p); });
+    var prods = s.products || [];
+    var hasCurr = prods.some(function (p) { return /current/i.test(p); });
     if (hasCurr) return "curr";
-    const hasMet = prods.some(function (p) {
+    var hasMet = prods.some(function (p) {
       return /air_temperature|wind|humidity|visibility|air_pressure/i.test(p);
     });
-    const hasWl = prods.some(function (p) { return /water_level|predictions/i.test(p); });
+    var hasWl = prods.some(function (p) { return /water_level|predictions/i.test(p); });
     if (hasMet && !hasWl) return "met";
     return "wl";
+  }
+
+  function formatOverlayLabel(product, val) {
+    if (val == null || isNaN(+val)) return "";
+    var v = +val;
+    if (product === "water_level" || product === "predictions" || product === "air_gap") return v.toFixed(1) + "ft";
+    if (product === "air_temperature" || product === "water_temperature") return v.toFixed(0) + "°";
+    if (product === "air_pressure") return v.toFixed(0);
+    if (product === "wind" || product === "currents") return v.toFixed(0);
+    if (product === "humidity") return v.toFixed(0) + "%";
+    if (product === "visibility") return v.toFixed(1);
+    return v.toFixed(1);
+  }
+
+  function overlayColor(product, val) {
+    // simple sequential color from cool→warm by value rank is done later; solid by type fallback
+    if (val == null) return null;
+    return null; // use CSS class markers; labels show value
   }
 
   function renderMarkers() {
     if (!markersLayer) return;
     markersLayer.clearLayers();
-    const filtered = getFilteredStations();
+    var filtered = getFilteredStations();
+    var product = ($("#productFilter") && $("#productFilter").value) || "none";
     filtered.forEach(function (s) {
       if (!s.lat || !s.lng) return;
-      const type = stationType(s);
-      const m = L.marker([s.lat, s.lng], { icon: markerIcon(type, s._fresh) });
-      m.bindTooltip("<strong>" + (s.name || s.id) + "</strong><br/><span class=\"mono\">" + s.id + "</span>", {
-        direction: "top", offset: [0, -8]
-      });
+      var type = stationType(s);
+      var label = "";
+      if (product !== "none" && s._overlay && s._overlay.product === product && s._overlay.v != null) {
+        label = formatOverlayLabel(product, s._overlay.v);
+      }
+      var m = L.marker([s.lat, s.lng], { icon: markerIcon(type, s._fresh, label) });
+      var tip = "<strong>" + (s.name || s.id) + "</strong><br/><span class=\"mono\">" + s.id + "</span>";
+      if (label) tip += "<br/><span class=\"mono\">" + product.replace(/_/g, " ") + ": " + label + "</span>";
+      if (s._overlay && s._overlay.t) tip += "<br/><span class=\"mono\">" + s._overlay.t + " UTC</span>";
+      m.bindTooltip(tip, { direction: "top", offset: [0, -8] });
       m.on("click", function () { openStationWindow(s); });
       markersLayer.addLayer(m);
     });
-    const sc = $("#stationCount");
-    const sb = $("#stationBadge");
+    var sc = $("#stationCount");
+    var sb = $("#stationBadge");
     if (sc) sc.textContent = filtered.length.toLocaleString();
     if (sb) sb.textContent = String(filtered.length);
   }
@@ -536,21 +575,39 @@
   function renderBuoys() {
     if (!buoyLayer) return;
     buoyLayer.clearLayers();
-    const show = $("#showBuoys") ? $("#showBuoys").checked : true;
+    var show = !$("#showBuoys") || $("#showBuoys").checked;
     if (!show) {
       if ($("#buoyCount")) $("#buoyCount").textContent = "0";
       return;
     }
-    buoyStations.forEach(function (b) {
-      if (!b.lat || !b.lng) return;
-      const m = L.marker([b.lat, b.lng], { icon: markerIcon("buoy", b._fresh) });
-      m.bindTooltip("<strong>" + (b.name || b.id) + "</strong><br/>NDBC buoy", {
-        direction: "top", offset: [0, -8]
-      });
+    var product = ($("#productFilter") && $("#productFilter").value) || "none";
+    var st = ($("#stateFilter") && $("#stateFilter").value) || "";
+    var q = (($("#searchInput") && $("#searchInput").value) || "").trim().toLowerCase();
+    var list = buoyStations.filter(function (b) {
+      if (!b.lat || !b.lng) return false;
+      if (q && !/^\d{5}/.test(q)) {
+        var hay = ((b.name || "") + " " + b.id).toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+    list.forEach(function (b) {
+      var label = "";
+      if (product === "water_temperature" && b.wtmp != null) label = (+b.wtmp).toFixed(0) + "°C";
+      else if (product === "air_temperature" && b.atmp != null) label = (+b.atmp).toFixed(0) + "°C";
+      else if (product === "wind" && b.wind != null) label = b.wind + "kn";
+      else if (product === "currents" && b.wind != null) label = ""; // NDBC has no current speed typically
+      var m = L.marker([b.lat, b.lng], { icon: markerIcon("buoy", b._fresh, label) });
+      var tip = "<strong>" + (b.name || b.id) + "</strong><br/>NDBC buoy";
+      if (b.wtmp != null) tip += "<br/>Water " + b.wtmp + " °C";
+      if (b.atmp != null) tip += "<br/>Air " + b.atmp + " °C";
+      if (b.wind != null) tip += "<br/>Wind " + b.wind + " kn";
+      if (b.wvht != null) tip += "<br/>Wave " + b.wvht + " m";
+      m.bindTooltip(tip, { direction: "top", offset: [0, -8] });
       m.on("click", function () { openBuoyWindow(b); });
       buoyLayer.addLayer(m);
     });
-    if ($("#buoyCount")) $("#buoyCount").textContent = buoyStations.length.toLocaleString();
+    if ($("#buoyCount")) $("#buoyCount").textContent = list.length.toLocaleString();
   }
 
   // ---------- DATA ----------
@@ -628,43 +685,70 @@
   }
 
   function loadBuoys() {
-    const urls = [
+    var urls = [
       "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt",
-      "https://corsproxy.io/?https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
+      "https://corsproxy.io/?" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"),
+      "https://api.allorigins.win/raw?url=" + encodeURIComponent("https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt")
     ];
+    function parseBuoyText(text) {
+      var lines = text.trim().split("\n");
+      // skip header lines starting with #
+      var startIdx = 0;
+      while (startIdx < lines.length && (lines[startIdx].charAt(0) === "#" || lines[startIdx].indexOf("YY") === 0 || lines[startIdx].indexOf("yr") >= 0)) {
+        startIdx++;
+      }
+      // standard latest_obs: first 2 lines are headers
+      if (startIdx < 2) startIdx = 2;
+      var list = [];
+      for (var i = startIdx; i < lines.length; i++) {
+        var p = lines[i].trim().split(/\s+/);
+        if (p.length < 6) continue;
+        var id = p[0];
+        var lat = parseFloat(p[1]);
+        var lon = parseFloat(p[2]);
+        if (!isFinite(lat) || !isFinite(lon)) continue;
+        // US coastal + territories + nearshore
+        if (lat < 10 || lat > 75 || lon < -180 || lon > -50) continue;
+        function mm(x) { return (x && x !== "MM" && x !== "999" && x !== "99.0") ? x : null; }
+        list.push({
+          id: id,
+          lat: lat,
+          lng: lon,
+          type: "buoy",
+          name: "NDBC " + id,
+          wind: mm(p[6]),
+          gst: mm(p[7]),
+          wvht: mm(p[8]),
+          dpd: mm(p[9]),
+          apd: mm(p[10]),
+          mwd: mm(p[11]),
+          bar: mm(p[12]),
+          atmp: mm(p[13]),
+          wtmp: mm(p[14]),
+          dewp: mm(p[15]),
+          _fresh: true
+        });
+      }
+      return list;
+    }
     function tryUrl(i) {
       if (i >= urls.length) {
-        if ($("#buoyCount")) $("#buoyCount").textContent = "—";
+        if ($("#buoyCount")) $("#buoyCount").textContent = buoyStations.length ? String(buoyStations.length) : "—";
+        if (!buoyStations.length) toast("NDBC buoys unavailable (CORS)");
         return Promise.resolve();
       }
-      return fetch(urls[i])
+      return fetch(urls[i], { cache: "no-store" })
         .then(function (r) {
           if (!r.ok) throw new Error("buoy " + r.status);
           return r.text();
         })
         .then(function (text) {
-          const lines = text.trim().split("\n").slice(2);
-          const list = [];
-          lines.forEach(function (line) {
-            const p = line.trim().split(/\s+/);
-            if (p.length < 6) return;
-            const id = p[0];
-            const lat = parseFloat(p[1]);
-            const lon = parseFloat(p[2]);
-            if (!isFinite(lat) || !isFinite(lon)) return;
-            if (lat < 15 || lat > 72 || lon < -180 || lon > -50) return;
-            list.push({
-              id: id, lat: lat, lng: lon, type: "buoy", name: "NDBC " + id,
-              wind: p[6] !== "MM" ? p[6] : null,
-              gst: p[7] !== "MM" ? p[7] : null,
-              wvht: p[8] !== "MM" ? p[8] : null,
-              atmp: p[13] !== "MM" ? p[13] : null,
-              wtmp: p[14] !== "MM" ? p[14] : null,
-              _fresh: true
-            });
-          });
+          if (!text || text.length < 100) throw new Error("empty");
+          var list = parseBuoyText(text);
+          if (!list.length) throw new Error("parse0");
           buoyStations = list;
           renderBuoys();
+          toast(list.length + " NDBC buoys loaded", 1800);
         })
         .catch(function () {
           return tryUrl(i + 1);
@@ -776,31 +860,41 @@
   }
 
   function getFilteredStations() {
-    const st = ($("#stateFilter") && $("#stateFilter").value) || "";
-    const ty = ($("#typeFilter") && $("#typeFilter").value) || "";
-    const showWl = !$("#showWaterLevels") || $("#showWaterLevels").checked;
-    const showCu = !$("#showCurrents") || $("#showCurrents").checked;
-    const portsOnly = $("#showPorts") && $("#showPorts").checked;
-    const q = (($("#searchInput") && $("#searchInput").value) || "").trim().toLowerCase();
+    var st = ($("#stateFilter") && $("#stateFilter").value) || "";
+    var ty = ($("#typeFilter") && $("#typeFilter").value) || "";
+    var showWl = !$("#showWaterLevels") || $("#showWaterLevels").checked;
+    var showCu = !$("#showCurrents") || $("#showCurrents").checked;
+    var portsOnly = $("#showPorts") && $("#showPorts").checked;
+    var product = ($("#productFilter") && $("#productFilter").value) || "none";
+    var q = (($("#searchInput") && $("#searchInput").value) || "").trim().toLowerCase();
 
-    let list = stations.filter(function (s) {
+    // When a product overlay is active, auto-include station types that carry that product
+    // so the overlay is never empty just because checkboxes are off.
+    if (product !== "none") {
+      if (product === "currents") showCu = true;
+      else if (product === "water_level" || product === "predictions" || product === "air_gap"
+        || product === "water_temperature") showWl = true;
+      else showWl = true; // met products often on water level platforms
+    }
+
+    var list = stations.filter(function (s) {
       if (st && s.state !== st) return false;
       if (portsOnly && !s.ports) return false;
-      const t = stationType(s);
+      var t = stationType(s);
       if (ty === "waterlevels" && t !== "wl") return false;
       if (ty === "currents" && t !== "curr") return false;
       if (ty === "met" && t !== "met") return false;
       if (ty === "ports" && !s.ports) return false;
       if (!showWl && t === "wl") return false;
       if (!showCu && t === "curr") return false;
+      // hide pure met if water levels off and not currents? keep met with showWl path above
       if (q && !/^\d{5}(-\d{4})?$/.test(q)) {
-        const hay = (s.name + " " + s.id + " " + s.state).toLowerCase();
+        var hay = (s.name + " " + s.id + " " + s.state).toLowerCase();
         if (hay.indexOf(q) < 0) return false;
       }
       return true;
     });
 
-    // zip proximity sort / filter
     if (zipCenter && /^\d{5}/.test(q.replace(/-.*/, ""))) {
       list = list
         .map(function (s) {
@@ -814,11 +908,104 @@
     return list;
   }
 
+  var productOverlayTimer = null;
+  var productOverlayToken = 0;
+
   function applyFilters() {
     renderMarkers();
     renderStationList();
     renderBuoys();
+    scheduleProductOverlay();
     saveLayoutLocal();
+  }
+
+  function scheduleProductOverlay() {
+    clearTimeout(productOverlayTimer);
+    productOverlayTimer = setTimeout(runProductOverlay, 350);
+  }
+
+  function runProductOverlay() {
+    var product = ($("#productFilter") && $("#productFilter").value) || "none";
+    if (product === "none") {
+      stations.forEach(function (s) { s._overlay = null; });
+      renderMarkers();
+      renderBuoys();
+      return;
+    }
+
+    // Map UI product → CO-OPS datagetter product
+    var apiProduct = product;
+    if (product === "predictions") apiProduct = "predictions";
+    if (product === "currents") apiProduct = "currents";
+
+    var list = getFilteredStations();
+    // Prefer stations currently in map view
+    if (map) {
+      var b = map.getBounds();
+      var inView = list.filter(function (s) { return b.contains([s.lat, s.lng]); });
+      if (inView.length) list = inView;
+    }
+    // Cap concurrent requests
+    list = list.slice(0, 50);
+    if (!list.length) {
+      toast("No stations for this overlay — enable Water levels / Currents");
+      return;
+    }
+
+    var token = ++productOverlayToken;
+    toast("Loading " + product.replace(/_/g, " ") + " for " + list.length + " stations…", 2000);
+
+    var done = 0;
+    function fetchOne(s) {
+      var url = DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+        + "&product=" + encodeURIComponent(apiProduct)
+        + "&datum=MLLW&units=english&time_zone=gmt&format=json";
+      if (apiProduct === "predictions") {
+        // latest prediction hour
+        url = DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+          + "&product=predictions&datum=MLLW&units=english&time_zone=gmt&interval=h&format=json";
+      }
+      return fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (token !== productOverlayToken) return;
+          var row = null;
+          if (j && j.data && j.data[0]) row = j.data[0];
+          else if (j && j.predictions && j.predictions[0]) row = j.predictions[0];
+          else if (j && j.currents && j.currents[0]) row = j.currents[0];
+          if (row) {
+            var v = row.v != null ? row.v : (row.s != null ? row.s : null);
+            s._overlay = { product: product, v: v, t: row.t || "" };
+          } else {
+            s._overlay = { product: product, v: null, t: "" };
+          }
+        })
+        .catch(function () {
+          if (token === productOverlayToken) s._overlay = { product: product, v: null, t: "" };
+        })
+        .then(function () {
+          done++;
+          if (done >= list.length && token === productOverlayToken) {
+            renderMarkers();
+            renderBuoys();
+            var ok = list.filter(function (s) { return s._overlay && s._overlay.v != null; }).length;
+            toast("Overlay: " + ok + "/" + list.length + " stations with data", 2200);
+          }
+        });
+    }
+
+    // batch in groups of 8
+    var i = 0;
+    function nextBatch() {
+      if (token !== productOverlayToken) return;
+      var batch = list.slice(i, i + 8);
+      i += 8;
+      if (!batch.length) return;
+      Promise.all(batch.map(fetchOne)).then(function () {
+        if (i < list.length) nextBatch();
+      });
+    }
+    nextBatch();
   }
 
   function isZipQuery(q) {
