@@ -360,6 +360,20 @@ button, input, select { font: inherit; color: inherit; }
   height: 100%;
   background: #0a1018;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.map-pane .stage-split {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.map-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 #map {
   position: absolute;
@@ -821,4 +835,214 @@ button, input, select { font: inherit; color: inherit; }
 .buoy-obs-table tbody tr:hover td {
   background: rgba(255,255,255,0.04);
   color: var(--text);
+}
+
+/* ===== Tides Currents Enhanced — stage split + 3D hydro ===== */
+.stage-split {
+  display: grid;
+  grid-template-columns: 1fr minmax(280px, 34%);
+  height: 100%;
+  min-height: 0;
+}
+.map-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.map-wrap #map {
+  width: 100%;
+  height: 100%;
+}
+.map-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 28px;
+  z-index: 500;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: rgba(8,12,20,0.75);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  pointer-events: none;
+  font-family: var(--mono);
+}
+.hydro3d-pane {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: #05070c;
+  min-height: 0;
+  overflow: hidden;
+}
+.h3d-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.h3d-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--accent, #22d3ee);
+}
+.h3d-sub {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.h3d-mode {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+}
+.h3d-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+.h3d-presets button {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-muted);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+.h3d-presets button:hover,
+.h3d-presets button.active {
+  border-color: var(--accent, #22d3ee);
+  color: var(--accent, #22d3ee);
+  background: rgba(34, 211, 238, 0.12);
+}
+.h3d-sample-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.h3d-sample-form input {
+  width: 72px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.h3d-sample-form button.go {
+  padding: 3px 8px;
+  border: 1px solid var(--accent, #22d3ee);
+  background: transparent;
+  color: var(--accent, #22d3ee);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  cursor: pointer;
+}
+.h3d-meters {
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.h3d-meter { margin-bottom: 5px; }
+.h3d-meter:last-child { margin-bottom: 0; }
+.h3d-meter .mh {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+.h3d-meter .ml {
+  font-size: 8px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.h3d-meter .mv {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text);
+}
+.h3d-bar {
+  height: 6px;
+  background: rgba(0,0,0,0.4);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.h3d-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  width: 0;
+  transition: width 0.4s ease, background 0.3s;
+  background: linear-gradient(90deg, #0ea5e9, #22d3ee);
+}
+.h3d-view {
+  flex: 1 1 auto;
+  min-height: 180px;
+  position: relative;
+  background: #03050a;
+}
+.h3d-view canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+.h3d-metrics {
+  font-size: 9px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.h3d-metrics .row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.h3d-metrics .k {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 8px;
+}
+.h3d-metrics .v {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--text);
+}
+.h3d-disclaimer {
+  font-size: 8px;
+  color: var(--text-dim);
+  padding: 4px 8px 8px;
+  margin: 0;
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+@media (max-width: 1000px) {
+  .stage-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr minmax(260px, 38%);
+  }
+  .hydro3d-pane {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
 }

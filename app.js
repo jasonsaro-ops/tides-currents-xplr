@@ -2789,6 +2789,7 @@
       initPanels();
       initUI();
       initNowCoast();
+      try { initHydro3D(); } catch (e) { console.error('hydro3d', e); }
       initLegendClicks();
 
       const params = new URLSearchParams(location.search);
@@ -2813,4 +2814,374 @@
   } else {
     boot();
   }
+
+
+  // ========== 3D HYDRO (Three.js synthesis of nearby CO-OPS / NDBC data) ==========
+  var h3d = {
+    renderer: null, scene: null, camera: null, water: null, particles: null,
+    anim: null, _ro: null, sampleLat: 39.9331, sampleLon: -75.142,
+    sampleMarker: null, metrics: null
+  };
+
+  function initHydro3D() {
+    var canvas = document.getElementById("h3d-canvas");
+    if (!canvas || typeof THREE === "undefined") {
+      console.warn("Hydro3D: Three.js or canvas missing");
+      return;
+    }
+    var view = canvas.parentElement;
+    var w = Math.max(100, view.clientWidth || 320);
+    var h = Math.max(120, view.clientHeight || 220);
+
+    h3d.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+    h3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    h3d.renderer.setSize(w, h, false);
+    h3d.renderer.setClearColor(0x03050a, 1);
+
+    h3d.scene = new THREE.Scene();
+    h3d.scene.fog = new THREE.FogExp2(0x03050a, 0.035);
+
+    h3d.camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 200);
+    h3d.camera.position.set(0, 8, 16);
+    h3d.camera.lookAt(0, 0, 0);
+
+    var amb = new THREE.AmbientLight(0x334455, 0.55);
+    h3d.scene.add(amb);
+    var dir = new THREE.DirectionalLight(0xaaddff, 0.85);
+    dir.position.set(5, 12, 8);
+    h3d.scene.add(dir);
+
+    // Water surface mesh
+    var geo = new THREE.PlaneGeometry(24, 24, 64, 64);
+    geo.rotateX(-Math.PI / 2);
+    var mat = new THREE.MeshStandardMaterial({
+      color: 0x0a4a6e,
+      metalness: 0.35,
+      roughness: 0.25,
+      transparent: true,
+      opacity: 0.92,
+      flatShading: false
+    });
+    h3d.water = new THREE.Mesh(geo, mat);
+    h3d.water.userData.basePositions = geo.attributes.position.array.slice(0);
+    h3d.scene.add(h3d.water);
+
+    // Flow particles
+    var COUNT = 400;
+    var pgeo = new THREE.BufferGeometry();
+    var pos = new Float32Array(COUNT * 3);
+    var vel = new Float32Array(COUNT * 3);
+    for (var i = 0; i < COUNT; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * 22;
+      pos[i * 3 + 1] = 0.15 + Math.random() * 0.4;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 22;
+      vel[i * 3] = 0.02 + Math.random() * 0.04;
+      vel[i * 3 + 1] = 0;
+      vel[i * 3 + 2] = (Math.random() - 0.5) * 0.02;
+    }
+    pgeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    h3d.particles = new THREE.Points(
+      pgeo,
+      new THREE.PointsMaterial({ color: 0x67e8f9, size: 0.12, transparent: true, opacity: 0.85 })
+    );
+    h3d.particles.userData.vel = vel;
+    h3d.scene.add(h3d.particles);
+
+    // Tide gauge pole
+    var pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 6, 8),
+      new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.6, roughness: 0.35 })
+    );
+    pole.position.set(-9, 3, -9);
+    h3d.scene.add(pole);
+    h3d.gaugeFloat = new THREE.Mesh(
+      new THREE.SphereGeometry(0.25, 12, 12),
+      new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x0e7490, emissiveIntensity: 0.4 })
+    );
+    h3d.gaugeFloat.position.set(-9, 1.2, -9);
+    h3d.scene.add(h3d.gaugeFloat);
+
+    // Grid floor under water
+    var grid = new THREE.GridHelper(24, 24, 0x1e3a5f, 0x0f172a);
+    grid.position.y = -0.02;
+    h3d.scene.add(grid);
+
+    if (h3d._ro) try { h3d._ro.disconnect(); } catch (e) {}
+    h3d._ro = new ResizeObserver(function () { resizeHydro3D(); });
+    h3d._ro.observe(view);
+
+    wireHydro3DControls();
+    if (map) {
+      map.on("click", function (e) {
+        if (e.originalEvent && e.originalEvent.target && e.originalEvent.target.closest &&
+            e.originalEvent.target.closest(".leaflet-marker-icon")) return;
+        setHydroSample(e.latlng.lat, e.latlng.lng, null);
+      });
+    }
+    // Default sample Philadelphia after data may load
+    setTimeout(function () { setHydroSample(39.9331, -75.142, "phl"); }, 1200);
+    animateHydro3D();
+  }
+
+  function resizeHydro3D() {
+    if (!h3d.renderer || !h3d.camera) return;
+    var canvas = document.getElementById("h3d-canvas");
+    if (!canvas) return;
+    var view = canvas.parentElement;
+    var w = Math.max(100, view.clientWidth);
+    var h = Math.max(120, view.clientHeight);
+    h3d.camera.aspect = w / h;
+    h3d.camera.updateProjectionMatrix();
+    h3d.renderer.setSize(w, h, false);
+    if (map) try { map.invalidateSize(true); } catch (e) {}
+  }
+
+  function wireHydro3DControls() {
+    var go = document.getElementById("h3d-go");
+    if (go) go.onclick = function () {
+      var la = parseFloat(document.getElementById("h3d-lat").value);
+      var lo = parseFloat(document.getElementById("h3d-lon").value);
+      if (isFinite(la) && isFinite(lo)) setHydroSample(la, lo, null);
+    };
+    document.querySelectorAll("#h3d-presets button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        setHydroSample(+b.dataset.lat, +b.dataset.lon, b.dataset.preset);
+      });
+    });
+  }
+
+  function setHydroSample(lat, lon, presetKey) {
+    h3d.sampleLat = +lat;
+    h3d.sampleLon = +lon;
+    var el = document.getElementById("h3d-loc");
+    if (el) el.textContent = lat.toFixed(4) + "° , " + lon.toFixed(4) + "° · sample";
+    var la = document.getElementById("h3d-lat"), lo = document.getElementById("h3d-lon");
+    if (la) la.value = (+lat).toFixed(4);
+    if (lo) lo.value = (+lon).toFixed(4);
+    document.querySelectorAll("#h3d-presets button").forEach(function (b) {
+      b.classList.toggle("active", presetKey && b.dataset.preset === presetKey);
+    });
+    if (map) {
+      if (h3d.sampleMarker) h3d.sampleMarker.setLatLng([lat, lon]);
+      else {
+        h3d.sampleMarker = L.circleMarker([lat, lon], {
+          radius: 8, color: "#fff", weight: 2, fillColor: "#22d3ee", fillOpacity: 0.95
+        }).addTo(map);
+        h3d.sampleMarker.bindTooltip("3D hydro sample", { direction: "top" });
+      }
+    }
+    var mode = document.getElementById("h3d-mode");
+    if (mode) mode.textContent = "LOADING…";
+    refreshHydro3DMetrics();
+  }
+
+  function nearestStation(lat, lon, list, maxKm) {
+    maxKm = maxKm || 80;
+    var best = null, bd = 1e9;
+    (list || []).forEach(function (s) {
+      if (!s.lat || !s.lng) return;
+      var d = haversineKm(lat, lon, s.lat, s.lng);
+      if (d < bd) { bd = d; best = s; best._dist = d; }
+    });
+    if (best && best._dist <= maxKm) return best;
+    return null;
+  }
+
+  function refreshHydro3DMetrics() {
+    var lat = h3d.sampleLat, lon = h3d.sampleLon;
+    var mode = document.getElementById("h3d-mode");
+    var wlSt = nearestStation(lat, lon, stations.filter(function (s) { return stationType(s) === "wl" || stationType(s) === "met"; }), 60);
+    var curSt = nearestStation(lat, lon, stations.filter(function (s) { return stationType(s) === "curr"; }), 60);
+    var buoy = nearestStation(lat, lon, buoyStations, 80);
+
+    var metrics = {
+      wl: null, wlLabel: "—",
+      current: null, curLabel: "—",
+      wave: null, waveLabel: "—",
+      sst: null, sstLabel: "—",
+      flowDir: 90, flowSpeed: 0.03
+    };
+
+    function setBar(id, pct, color) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      if (color) el.style.background = color;
+    }
+
+    var pending = [];
+
+    if (wlSt) {
+      var nwl = document.getElementById("h3d-near-wl");
+      if (nwl) nwl.textContent = (wlSt.name || wlSt.id) + " · " + wlSt._dist.toFixed(1) + " km";
+      pending.push(
+        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(wlSt.id)
+          + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json")
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) {
+            var v = j && j.data && j.data[0] && j.data[0].v;
+            if (v != null) {
+              metrics.wl = +v;
+              metrics.wlLabel = (+v).toFixed(2) + " ft MLLW";
+            }
+          }).catch(function () {})
+      );
+      pending.push(
+        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(wlSt.id)
+          + "&product=water_temperature&datum=MLLW&units=english&time_zone=gmt&format=json")
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) {
+            var v = j && j.data && j.data[0] && j.data[0].v;
+            if (v != null) {
+              metrics.sst = +v;
+              metrics.sstLabel = (+v).toFixed(1) + " °F";
+            }
+          }).catch(function () {})
+      );
+      pending.push(
+        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(wlSt.id)
+          + "&product=currents&datum=MLLW&units=english&time_zone=gmt&format=json")
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) {
+            var row = j && (j.data && j.data[0] || j.currents && j.currents[0]);
+            if (row) {
+              var spd = row.s != null ? +row.s : (row.v != null ? +row.v : null);
+              var dir = row.d != null ? +row.d : null;
+              if (spd != null) {
+                metrics.current = spd;
+                metrics.curLabel = spd.toFixed(2) + " kn";
+                metrics.flowSpeed = 0.02 + Math.min(0.12, spd * 0.04);
+              }
+              if (dir != null) metrics.flowDir = dir;
+            }
+          }).catch(function () {})
+      );
+    } else {
+      var nwl2 = document.getElementById("h3d-near-wl");
+      if (nwl2) nwl2.textContent = "none nearby";
+    }
+
+    if (buoy) {
+      var nb = document.getElementById("h3d-near-buoy");
+      if (nb) nb.textContent = (buoy.name || buoy.id) + " · " + buoy._dist.toFixed(1) + " km";
+      if (buoy.wvht != null) {
+        var ft = typeof mToFt === "function" ? mToFt(buoy.wvht) : (+buoy.wvht * 3.28084);
+        metrics.wave = ft;
+        metrics.waveLabel = ft.toFixed(1) + " ft";
+      }
+      if (metrics.sst == null && buoy.wtmp != null) {
+        var f = typeof cToF === "function" ? cToF(buoy.wtmp) : (+buoy.wtmp * 9 / 5 + 32);
+        metrics.sst = f;
+        metrics.sstLabel = f.toFixed(0) + " °F";
+      }
+      if (metrics.current == null && buoy.wind != null) {
+        // surface drift proxy from wind (not true current)
+        var kt = typeof msToKt === "function" ? msToKt(buoy.wind) : (+buoy.wind * 1.94384);
+        metrics.flowSpeed = 0.02 + Math.min(0.08, kt * 0.008);
+        metrics.flowDir = buoy.wdir != null ? +buoy.wdir : 90;
+        if (metrics.curLabel === "—") metrics.curLabel = "proxy ~" + (kt * 0.03).toFixed(2) + " kn";
+      }
+    } else {
+      var nb2 = document.getElementById("h3d-near-buoy");
+      if (nb2) nb2.textContent = "none nearby";
+    }
+
+    Promise.all(pending).then(function () {
+      h3d.metrics = metrics;
+      var mwl = document.getElementById("h3d-m-wl");
+      if (mwl) mwl.textContent = metrics.wlLabel;
+      var mc = document.getElementById("h3d-m-cur");
+      if (mc) mc.textContent = metrics.curLabel;
+      var mw = document.getElementById("h3d-m-wave");
+      if (mw) mw.textContent = metrics.waveLabel;
+      var ms = document.getElementById("h3d-m-sst");
+      if (ms) ms.textContent = metrics.sstLabel;
+
+      setBar("h3d-b-wl", metrics.wl != null ? Math.min(100, (metrics.wl / 10) * 100) : 5, "linear-gradient(90deg,#0369a1,#22d3ee)");
+      setBar("h3d-b-cur", metrics.current != null ? Math.min(100, metrics.current * 25) : (metrics.flowSpeed * 400), "linear-gradient(90deg,#0f766e,#2dd4bf)");
+      setBar("h3d-b-wave", metrics.wave != null ? Math.min(100, metrics.wave * 12) : 8, "linear-gradient(90deg,#1d4ed8,#60a5fa)");
+      setBar("h3d-b-sst", metrics.sst != null ? Math.min(100, ((metrics.sst - 40) / 50) * 100) : 10, "linear-gradient(90deg,#c2410c,#fbbf24)");
+
+      var flow = document.getElementById("h3d-flow");
+      if (flow) {
+        flow.textContent = metrics.current != null
+          ? ("Observed " + metrics.flowDir.toFixed(0) + "°")
+          : ("Surface estimate " + metrics.flowDir.toFixed(0) + "°");
+      }
+      if (mode) mode.textContent = "LIVE";
+      applyHydro3DScene(metrics);
+    });
+  }
+
+  function applyHydro3DScene(m) {
+    if (!h3d.water) return;
+    // Water color by SST
+    if (m.sst != null && h3d.water.material) {
+      // cold blue → warm teal/green
+      var t = Math.max(0, Math.min(1, (m.sst - 45) / 40));
+      var col = new THREE.Color().setHSL(0.55 - t * 0.25, 0.75, 0.28 + t * 0.12);
+      h3d.water.material.color.copy(col);
+    }
+    // Gauge float height from tide
+    if (h3d.gaugeFloat) {
+      var gy = 0.5 + (m.wl != null ? Math.max(-1, Math.min(4, m.wl * 0.35)) : 1.0);
+      h3d.gaugeFloat.position.y = gy;
+    }
+  }
+
+  function animateHydro3D() {
+    h3d.anim = requestAnimationFrame(animateHydro3D);
+    if (!h3d.renderer || !h3d.scene || !h3d.camera) return;
+    var t = performance.now() * 0.001;
+    var m = h3d.metrics || {};
+    var waveAmp = m.wave != null ? 0.08 + Math.min(0.55, m.wave * 0.06) : 0.12;
+    var tideBias = m.wl != null ? Math.max(-0.5, Math.min(1.2, m.wl * 0.08)) : 0;
+
+    if (h3d.water) {
+      var pos = h3d.water.geometry.attributes.position;
+      var base = h3d.water.userData.basePositions;
+      for (var i = 0; i < pos.count; i++) {
+        var x = base[i * 3];
+        var z = base[i * 3 + 2];
+        var y = tideBias
+          + Math.sin(x * 0.45 + t * 1.2) * waveAmp
+          + Math.cos(z * 0.38 + t * 0.9) * waveAmp * 0.7
+          + Math.sin((x + z) * 0.25 + t * 1.6) * waveAmp * 0.35;
+        pos.setY(i, y);
+      }
+      pos.needsUpdate = true;
+      h3d.water.geometry.computeVertexNormals();
+    }
+
+    if (h3d.particles) {
+      var p = h3d.particles.geometry.attributes.position;
+      var vel = h3d.particles.userData.vel;
+      var dir = ((m.flowDir != null ? m.flowDir : 90) * Math.PI) / 180;
+      var spd = m.flowSpeed != null ? m.flowSpeed : 0.03;
+      var vx = Math.sin(dir) * spd;
+      var vz = Math.cos(dir) * spd;
+      for (var j = 0; j < p.count; j++) {
+        var px = p.getX(j) + vx + (vel[j * 3] * 0.15);
+        var py = p.getY(j);
+        var pz = p.getZ(j) + vz + (vel[j * 3 + 2] * 0.15);
+        if (px > 12) px = -12;
+        if (px < -12) px = 12;
+        if (pz > 12) pz = -12;
+        if (pz < -12) pz = 12;
+        p.setXYZ(j, px, py, pz);
+      }
+      p.needsUpdate = true;
+    }
+
+    // Slow orbit camera
+    var R = 16;
+    h3d.camera.position.x = Math.sin(t * 0.08) * R;
+    h3d.camera.position.z = Math.cos(t * 0.08) * R;
+    h3d.camera.position.y = 7 + Math.sin(t * 0.15) * 0.8;
+    h3d.camera.lookAt(0, tideBias, 0);
+
+    h3d.renderer.render(h3d.scene, h3d.camera);
+  }
+
+
 })();

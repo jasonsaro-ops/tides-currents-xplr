@@ -1,44 +1,40 @@
-# TIDES & CURRENTS XPLR
+# Tides & Currents Enhanced
 
-Elite NOAA tides, currents & coastal intelligence dashboard.
+NOAA CO-OPS / NDBC coastal intelligence dashboard with a **3D hydro pane** (WeatherXplr Enhanced–style split stage).
 
-## Fixes in this build
+## Features
 
-- **Map + data loading hardened** — null-safe boot, retry on station failure, map `invalidateSize` after layout
-- **Scrollable columns** — left/right rails scroll independently; lists have max-height; works on smaller windows
-- **Buttons & interactions** — all controls wired; floating windows for stations, buoys, alerts
-- **Montco three-tone alert scheme** (Web Audio, no files):
-  - **Fire tone** (sawtooth alternating) → severe / extreme flood alerts
-  - **EMS tone** (rising sine C5→G5) → moderate / watch
-  - **Traffic tone** (triangle double-beep) → advisory + soft refresh + tone unlock confirmation
-- **ZIP code search** — type a 5-digit ZIP to geocode (Nominatim) and center map + filter nearby stations
-- **Montco-style edge accents** — 3px left border colors on station cards, watch cards, alerts, and floating windows
+- Full map explorer: stations, NDBC buoys, NWS alerts, product overlays, radar
+- **3D HYDRO** pane (Three.js): animated water surface, flow particles, tide gauge
+- Driven by **nearby real observations** (water level, currents, waves, water temp)
+- Click the map or use presets (Philadelphia, NY Harbor, Miami, Galveston, Seattle)
 
-## Soft refresh
+## 3D meaning (honest)
 
-Every **2 minutes** (soft). Manual: logo button or **R**.
+The 3D view is a **graphical synthesis**, not a full hydrodynamic model:
 
-## Layout save / load
+| Visual | Data source |
+|--------|-------------|
+| Surface height / gauge float | CO-OPS water level (MLLW) |
+| Wave amplitude | NDBC significant wave height |
+| Flow particle direction/speed | CO-OPS currents when available; else light wind proxy |
+| Water color | Water temperature (°F) |
 
-- Auto localStorage
-- **Layout** → Export / Import JSON
-- `?layout=https://raw.githubusercontent.com/.../layout.json`
+## Deploy
 
-## Hosting
+Static GitHub Pages:
 
-Repo name: `tides-currents-xplr` · GitHub Pages on `main` root.
+1. Push this repo (include `data/`)
+2. Enable Pages from `main` / root
+3. Hard-refresh after deploy
+
+No Cloudflare Worker required for 3D (runs fully in-browser).
 
 ## Stack
 
-Leaflet · MarkerCluster · Chart.js · NOAA CO-OPS · NDBC · NWS · RainViewer · Nominatim (ZIP)
+- Leaflet map · Chart.js · Three.js r128
+- NOAA CO-OPS MDAPI / Data API · NDBC · NWS Alerts · RainViewer
 
+## Repo name suggestion
 
-## NDBC buoys (no CORS)
-
-Buoy locations and observations load from **same-origin** files:
-
-- `data/ndbc-stations.json` — full station catalog
-- `data/ndbc-latest.json` — catalog + latest observations
-
-GitHub Action `.github/workflows/ndbc-refresh.yml` refreshes these hourly.
-After first push, run the workflow once (**Actions → Refresh NDBC buoy data → Run workflow**) if markers are empty.
+`tides-currents-enhanced`
