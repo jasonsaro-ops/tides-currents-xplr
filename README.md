@@ -1,40 +1,36 @@
 # Tides & Currents Enhanced
 
-NOAA CO-OPS / NDBC coastal intelligence dashboard with a **3D hydro pane** (WeatherXplr Enhanced–style split stage).
+NOAA coastal dashboard with **multi-channel thickness mapping** (3D) and a **docked station detail pane**.
 
-## Features
+## Layout
+| Left | Center | Right (split) |
+|------|--------|----------------|
+| Filters (slim) | Leaflet map | **Thickness map** (top) + **Station detail** (bottom) |
 
-- Full map explorer: stations, NDBC buoys, NWS alerts, product overlays, radar
-- **3D HYDRO** pane (Three.js): animated water surface, flow particles, tide gauge
-- Driven by **nearby real observations** (water level, currents, waves, water temp)
-- Click the map or use presets (Philadelphia, NY Harbor, Miami, Galveston, Seattle)
+## Multi-channel thickness map
+Inspired by hydrogeological / thickness block models:
 
-## 3D meaning (honest)
+| Channel | Visual | Source |
+|---------|--------|--------|
+| Water level | Column **height** (ft MLLW) | CO-OPS `water_level` |
+| Water temp | Column **color** (°F) | CO-OPS / NDBC |
+| Waves | **Cap** thickness (ft) | NDBC `wvht` |
+| Currents | **Arrows** direction/speed | CO-OPS `currents` |
 
-The 3D view is a **graphical synthesis**, not a full hydrodynamic model:
+Click the map or a preset → builds columns from nearby stations.
 
-| Visual | Data source |
-|--------|-------------|
-| Surface height / gauge float | CO-OPS water level (MLLW) |
-| Wave amplitude | NDBC significant wave height |
-| Flow particle direction/speed | CO-OPS currents when available; else light wind proxy |
-| Water color | Water temperature (°F) |
+## Station clicks → detail pane
+No reliance on floating windows for primary inspection. CO-OPS and NDBC clicks fill the **Station detail** dock with live products + chart.
+
+## Trusted sources only
+| Keep | Role |
+|------|------|
+| **NOAA CO-OPS** MDAPI + Datagetter | Stations, WL, currents, temps, predictions (6‑min, CORS OK) |
+| **NDBC** latest_obs (+ embedded series) | Buoy waves / met (via same-origin cache) |
+| **NWS Alerts API** | Flood / coastal warnings |
+| **RainViewer** | Optional radar |
+
+**Removed / de-emphasized:** USGS gauges, most nowCOAST export layers, satellite, lightning, inland-flood duplicates (redundant or unreliable in-browser).
 
 ## Deploy
-
-Static GitHub Pages:
-
-1. Push this repo (include `data/`)
-2. Enable Pages from `main` / root
-3. Hard-refresh after deploy
-
-No Cloudflare Worker required for 3D (runs fully in-browser).
-
-## Stack
-
-- Leaflet map · Chart.js · Three.js r128
-- NOAA CO-OPS MDAPI / Data API · NDBC · NWS Alerts · RainViewer
-
-## Repo name suggestion
-
-`tides-currents-enhanced`
+GitHub Pages static site. Include `data/`. No API keys required.

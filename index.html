@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="description" content="TIDES & CURRENTS ENHANCED — NOAA coastal intelligence with 3D hydro visualization." />
+  <meta name="description" content="TIDES & CURRENTS ENHANCED — Multi-channel thickness mapping of tides, currents, waves &amp; temperature — NOAA CO-OPS / NDBC." />
   <meta name="theme-color" content="#070a0f" />
-  <title>TIDES &amp; CURRENTS ENHANCED ENHANCED</title>
+  <title>TIDES &amp; CURRENTS ENHANCED</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="" />
@@ -30,7 +30,7 @@
         </button>
         <div class="brand">
           <span class="brand-title">TIDES &amp; CURRENTS ENHANCED</span>
-          <span class="brand-sub">3D HYDRO · NOAA CO-OPS / NDBC</span>
+          <span class="brand-sub">MULTI-CHANNEL · NOAA CO-OPS / NDBC</span>
         </div>
       </div>
 
@@ -192,10 +192,9 @@
             <header class="panel-head"><h2>Data Sources</h2></header>
             <div class="panel-body sources-list">
               <a href="https://tidesandcurrents.noaa.gov/" target="_blank" rel="noopener">NOAA CO-OPS</a>
-              <a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noopener">NDBC Buoys</a>
-              <a href="https://www.weather.gov/" target="_blank" rel="noopener">NWS Alerts</a>
-              <a href="https://waterdata.usgs.gov/" target="_blank" rel="noopener">USGS Water</a>
-              <a href="https://nowcoast.noaa.gov/" target="_blank" rel="noopener">nowCOAST</a>
+              <a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noopener">NDBC</a>
+              <a href="https://api.weather.gov/" target="_blank" rel="noopener">NWS Alerts API</a>
+              <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>
             </div>
           </section>
         </div>
@@ -218,40 +217,50 @@
             </div>
             <div class="map-hint" id="mapHint">Click map to sample location for 3D hydro</div>
           </div>
-          <aside class="hydro3d-pane" id="hydro3dPane" aria-label="3D hydro visualization">
-            <header class="h3d-head">
-              <div>
-                <div class="h3d-title">3D HYDRO</div>
-                <div class="h3d-sub" id="h3d-loc">Click map to sample</div>
+          <aside class="viz-rail" id="vizRail" aria-label="Thickness map and station detail">
+          <div class="viz-split">
+            <div class="thickness-pane" id="thicknessPane">
+              <header class="h3d-head">
+                <div>
+                  <div class="h3d-title">MULTI-CHANNEL THICKNESS</div>
+                  <div class="h3d-sub" id="h3d-loc">Sample a point or click a station</div>
+                </div>
+                <div class="h3d-mode" id="h3d-mode">IDLE</div>
+              </header>
+              <div class="channel-legend" id="channelLegend">
+                <div class="ch"><i class="c-wl"></i> Height = water level (ft MLLW)</div>
+                <div class="ch"><i class="c-sst"></i> Color = water temp (°F)</div>
+                <div class="ch"><i class="c-wave"></i> Cap = wave height (ft)</div>
+                <div class="ch"><i class="c-flow"></i> Arrows = current / flow</div>
               </div>
-              <div class="h3d-mode" id="h3d-mode">IDLE</div>
-            </header>
-            <div class="h3d-presets" id="h3d-presets">
-              <button type="button" data-preset="phl" data-lat="39.9331" data-lon="-75.142">Philadelphia</button>
-              <button type="button" data-preset="nyc" data-lat="40.7" data-lon="-74.0">NY Harbor</button>
-              <button type="button" data-preset="mia" data-lat="25.77" data-lon="-80.13">Miami</button>
-              <button type="button" data-preset="gal" data-lat="29.31" data-lon="-94.79">Galveston</button>
-              <button type="button" data-preset="sea" data-lat="47.60" data-lon="-122.34">Seattle</button>
+              <div class="h3d-presets" id="h3d-presets">
+                <button type="button" data-preset="phl" data-lat="39.9331" data-lon="-75.142">Philadelphia</button>
+                <button type="button" data-preset="nyc" data-lat="40.7" data-lon="-74.0">NY Harbor</button>
+                <button type="button" data-preset="mia" data-lat="25.77" data-lon="-80.13">Miami</button>
+                <button type="button" data-preset="gal" data-lat="29.31" data-lon="-94.79">Galveston</button>
+                <button type="button" data-preset="sea" data-lat="47.60" data-lon="-122.34">Seattle</button>
+              </div>
+              <div class="h3d-view"><canvas id="h3d-canvas"></canvas></div>
+              <div class="h3d-metrics compact" id="h3d-metrics">
+                <div class="row"><span class="k">Nodes</span><span class="v" id="h3d-nodes">0</span></div>
+                <div class="row"><span class="k">Channel</span><span class="v" id="h3d-channel">WL · SST · Wave · Flow</span></div>
+              </div>
+              <p class="h3d-disclaimer">3D columns = interpolated thickness from nearby CO-OPS / NDBC sensors. Not a hydrodynamic model.</p>
             </div>
-            <div class="h3d-sample-form">
-              <input id="h3d-lat" type="text" placeholder="lat" />
-              <input id="h3d-lon" type="text" placeholder="lon" />
-              <button type="button" class="go" id="h3d-go">Sample</button>
+            <div class="detail-pane" id="detailPane">
+              <header class="detail-head">
+                <div>
+                  <div class="detail-title" id="detailTitle">Station detail</div>
+                  <div class="detail-sub" id="detailSub">Click a station or buoy on the map</div>
+                </div>
+                <button type="button" class="icon-btn" id="detailClose" title="Clear">×</button>
+              </header>
+              <div class="detail-body" id="detailBody">
+                <p class="muted pad">Select a water-level station or NDBC buoy to load live observations, predictions, and metadata here.</p>
+              </div>
             </div>
-            <div class="h3d-meters" id="h3d-meters">
-              <div class="h3d-meter"><div class="mh"><span class="ml">Tide / WL</span><span class="mv" id="h3d-m-wl">—</span></div><div class="h3d-bar"><i id="h3d-b-wl"></i></div></div>
-              <div class="h3d-meter"><div class="mh"><span class="ml">Current</span><span class="mv" id="h3d-m-cur">—</span></div><div class="h3d-bar"><i id="h3d-b-cur"></i></div></div>
-              <div class="h3d-meter"><div class="mh"><span class="ml">Waves</span><span class="mv" id="h3d-m-wave">—</span></div><div class="h3d-bar"><i id="h3d-b-wave"></i></div></div>
-              <div class="h3d-meter"><div class="mh"><span class="ml">Water temp</span><span class="mv" id="h3d-m-sst">—</span></div><div class="h3d-bar"><i id="h3d-b-sst"></i></div></div>
-            </div>
-            <div class="h3d-view"><canvas id="h3d-canvas"></canvas></div>
-            <div class="h3d-metrics" id="h3d-metrics">
-              <div class="row"><span class="k">Nearest WL</span><span class="v" id="h3d-near-wl">—</span></div>
-              <div class="row"><span class="k">Nearest buoy</span><span class="v" id="h3d-near-buoy">—</span></div>
-              <div class="row"><span class="k">Flow model</span><span class="v" id="h3d-flow">Surface estimate</span></div>
-            </div>
-            <p class="h3d-disclaimer">3D is a graphical synthesis of nearby CO-OPS / NDBC observations — not a hydrodynamic forecast model.</p>
-          </aside>
+          </div>
+        </aside>
         </div>
       </section>
 
@@ -286,7 +295,7 @@
 
           <section class="panel" data-panel="usgs">
             <header class="panel-head">
-              <h2>USGS Gauges</h2>
+              <h2>Sources</h2>
               <button type="button" class="icon-btn" id="refreshUsgs" title="Refresh">↻</button>
             </header>
             <div class="panel-body">

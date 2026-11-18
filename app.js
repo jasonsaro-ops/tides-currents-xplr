@@ -2816,95 +2816,56 @@
   }
 
 
-  // ========== 3D HYDRO (Three.js synthesis of nearby CO-OPS / NDBC data) ==========
+  
+  // ========== MULTI-CHANNEL THICKNESS MAP (Three.js) ==========
+  // Channels: height=WL, color=SST, cap=waves, arrows=current
   var h3d = {
-    renderer: null, scene: null, camera: null, water: null, particles: null,
-    anim: null, _ro: null, sampleLat: 39.9331, sampleLon: -75.142,
-    sampleMarker: null, metrics: null
+    renderer: null, scene: null, camera: null, group: null, anim: null, _ro: null,
+    sampleLat: 39.9331, sampleLon: -75.142, sampleMarker: null, nodes: []
   };
 
   function initHydro3D() {
     var canvas = document.getElementById("h3d-canvas");
     if (!canvas || typeof THREE === "undefined") {
-      console.warn("Hydro3D: Three.js or canvas missing");
+      console.warn("Thickness map: Three.js missing");
       return;
     }
     var view = canvas.parentElement;
-    var w = Math.max(100, view.clientWidth || 320);
-    var h = Math.max(120, view.clientHeight || 220);
+    var w = Math.max(120, view.clientWidth || 320);
+    var h = Math.max(140, view.clientHeight || 200);
 
-    h3d.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+    h3d.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
     h3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     h3d.renderer.setSize(w, h, false);
-    h3d.renderer.setClearColor(0x03050a, 1);
+    h3d.renderer.setClearColor(0x060a10, 1);
 
     h3d.scene = new THREE.Scene();
-    h3d.scene.fog = new THREE.FogExp2(0x03050a, 0.035);
+    h3d.scene.fog = new THREE.FogExp2(0x060a10, 0.028);
 
-    h3d.camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 200);
-    h3d.camera.position.set(0, 8, 16);
+    h3d.camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 200);
+    h3d.camera.position.set(14, 12, 14);
     h3d.camera.lookAt(0, 0, 0);
 
-    var amb = new THREE.AmbientLight(0x334455, 0.55);
-    h3d.scene.add(amb);
-    var dir = new THREE.DirectionalLight(0xaaddff, 0.85);
-    dir.position.set(5, 12, 8);
+    h3d.scene.add(new THREE.AmbientLight(0x88aacc, 0.55));
+    var dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(8, 18, 6);
     h3d.scene.add(dir);
 
-    // Water surface mesh
-    var geo = new THREE.PlaneGeometry(24, 24, 64, 64);
-    geo.rotateX(-Math.PI / 2);
-    var mat = new THREE.MeshStandardMaterial({
-      color: 0x0a4a6e,
-      metalness: 0.35,
-      roughness: 0.25,
-      transparent: true,
-      opacity: 0.92,
-      flatShading: false
-    });
-    h3d.water = new THREE.Mesh(geo, mat);
-    h3d.water.userData.basePositions = geo.attributes.position.array.slice(0);
-    h3d.scene.add(h3d.water);
-
-    // Flow particles
-    var COUNT = 400;
-    var pgeo = new THREE.BufferGeometry();
-    var pos = new Float32Array(COUNT * 3);
-    var vel = new Float32Array(COUNT * 3);
-    for (var i = 0; i < COUNT; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 22;
-      pos[i * 3 + 1] = 0.15 + Math.random() * 0.4;
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 22;
-      vel[i * 3] = 0.02 + Math.random() * 0.04;
-      vel[i * 3 + 1] = 0;
-      vel[i * 3 + 2] = (Math.random() - 0.5) * 0.02;
-    }
-    pgeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    h3d.particles = new THREE.Points(
-      pgeo,
-      new THREE.PointsMaterial({ color: 0x67e8f9, size: 0.12, transparent: true, opacity: 0.85 })
-    );
-    h3d.particles.userData.vel = vel;
-    h3d.scene.add(h3d.particles);
-
-    // Tide gauge pole
-    var pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 6, 8),
-      new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.6, roughness: 0.35 })
-    );
-    pole.position.set(-9, 3, -9);
-    h3d.scene.add(pole);
-    h3d.gaugeFloat = new THREE.Mesh(
-      new THREE.SphereGeometry(0.25, 12, 12),
-      new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x0e7490, emissiveIntensity: 0.4 })
-    );
-    h3d.gaugeFloat.position.set(-9, 1.2, -9);
-    h3d.scene.add(h3d.gaugeFloat);
-
-    // Grid floor under water
-    var grid = new THREE.GridHelper(24, 24, 0x1e3a5f, 0x0f172a);
-    grid.position.y = -0.02;
+    var grid = new THREE.GridHelper(20, 20, 0x1e3a5f, 0x0f172a);
+    grid.position.y = 0;
     h3d.scene.add(grid);
+
+    // Base water plane (thin reference)
+    var plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(20, 20),
+      new THREE.MeshStandardMaterial({ color: 0x0c4a6e, transparent: true, opacity: 0.35, metalness: 0.2, roughness: 0.8 })
+    );
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.y = 0.01;
+    h3d.scene.add(plane);
+
+    h3d.group = new THREE.Group();
+    h3d.scene.add(h3d.group);
 
     if (h3d._ro) try { h3d._ro.disconnect(); } catch (e) {}
     h3d._ro = new ResizeObserver(function () { resizeHydro3D(); });
@@ -2918,8 +2879,7 @@
         setHydroSample(e.latlng.lat, e.latlng.lng, null);
       });
     }
-    // Default sample Philadelphia after data may load
-    setTimeout(function () { setHydroSample(39.9331, -75.142, "phl"); }, 1200);
+    setTimeout(function () { setHydroSample(39.9331, -75.142, "phl"); }, 1500);
     animateHydro3D();
   }
 
@@ -2928,8 +2888,8 @@
     var canvas = document.getElementById("h3d-canvas");
     if (!canvas) return;
     var view = canvas.parentElement;
-    var w = Math.max(100, view.clientWidth);
-    var h = Math.max(120, view.clientHeight);
+    var w = Math.max(120, view.clientWidth);
+    var h = Math.max(140, view.clientHeight);
     h3d.camera.aspect = w / h;
     h3d.camera.updateProjectionMatrix();
     h3d.renderer.setSize(w, h, false);
@@ -2937,27 +2897,27 @@
   }
 
   function wireHydro3DControls() {
-    var go = document.getElementById("h3d-go");
-    if (go) go.onclick = function () {
-      var la = parseFloat(document.getElementById("h3d-lat").value);
-      var lo = parseFloat(document.getElementById("h3d-lon").value);
-      if (isFinite(la) && isFinite(lo)) setHydroSample(la, lo, null);
-    };
     document.querySelectorAll("#h3d-presets button").forEach(function (b) {
       b.addEventListener("click", function () {
         setHydroSample(+b.dataset.lat, +b.dataset.lon, b.dataset.preset);
       });
     });
+    var dc = document.getElementById("detailClose");
+    if (dc) dc.onclick = function () {
+      var body = document.getElementById("detailBody");
+      if (body) body.innerHTML = '<p class="muted pad">Select a water-level station or NDBC buoy to load live observations.</p>';
+      var t = document.getElementById("detailTitle");
+      if (t) t.textContent = "Station detail";
+      var s = document.getElementById("detailSub");
+      if (s) s.textContent = "Click a station or buoy on the map";
+    };
   }
 
   function setHydroSample(lat, lon, presetKey) {
     h3d.sampleLat = +lat;
     h3d.sampleLon = +lon;
     var el = document.getElementById("h3d-loc");
-    if (el) el.textContent = lat.toFixed(4) + "° , " + lon.toFixed(4) + "° · sample";
-    var la = document.getElementById("h3d-lat"), lo = document.getElementById("h3d-lon");
-    if (la) la.value = (+lat).toFixed(4);
-    if (lo) lo.value = (+lon).toFixed(4);
+    if (el) el.textContent = lat.toFixed(4) + "°, " + lon.toFixed(4) + "°";
     document.querySelectorAll("#h3d-presets button").forEach(function (b) {
       b.classList.toggle("active", presetKey && b.dataset.preset === presetKey);
     });
@@ -2965,222 +2925,314 @@
       if (h3d.sampleMarker) h3d.sampleMarker.setLatLng([lat, lon]);
       else {
         h3d.sampleMarker = L.circleMarker([lat, lon], {
-          radius: 8, color: "#fff", weight: 2, fillColor: "#22d3ee", fillOpacity: 0.95
+          radius: 7, color: "#fff", weight: 2, fillColor: "#22d3ee", fillOpacity: 0.95
         }).addTo(map);
-        h3d.sampleMarker.bindTooltip("3D hydro sample", { direction: "top" });
       }
     }
     var mode = document.getElementById("h3d-mode");
     if (mode) mode.textContent = "LOADING…";
-    refreshHydro3DMetrics();
+    buildThicknessField(lat, lon);
   }
 
-  function nearestStation(lat, lon, list, maxKm) {
-    maxKm = maxKm || 80;
-    var best = null, bd = 1e9;
+  function nearestMany(lat, lon, list, maxKm, limit) {
+    maxKm = maxKm || 55;
+    limit = limit || 12;
+    var scored = [];
     (list || []).forEach(function (s) {
-      if (!s.lat || !s.lng) return;
+      if (s.lat == null || s.lng == null) return;
       var d = haversineKm(lat, lon, s.lat, s.lng);
-      if (d < bd) { bd = d; best = s; best._dist = d; }
+      if (d <= maxKm) scored.push({ s: s, d: d });
     });
-    if (best && best._dist <= maxKm) return best;
-    return null;
+    scored.sort(function (a, b) { return a.d - b.d; });
+    return scored.slice(0, limit);
   }
 
-  function refreshHydro3DMetrics() {
-    var lat = h3d.sampleLat, lon = h3d.sampleLon;
-    var mode = document.getElementById("h3d-mode");
-    var wlSt = nearestStation(lat, lon, stations.filter(function (s) { return stationType(s) === "wl" || stationType(s) === "met"; }), 60);
-    var curSt = nearestStation(lat, lon, stations.filter(function (s) { return stationType(s) === "curr"; }), 60);
-    var buoy = nearestStation(lat, lon, buoyStations, 80);
+  function tempColor(f) {
+    // 40F deep blue → 55 teal → 70 green → 80 yellow → 90 orange
+    if (f == null || isNaN(f)) return new THREE.Color(0x64748b);
+    var t = Math.max(0, Math.min(1, (f - 40) / 50));
+    var c = new THREE.Color();
+    c.setHSL(0.58 - t * 0.55, 0.75, 0.42);
+    return c;
+  }
 
-    var metrics = {
-      wl: null, wlLabel: "—",
-      current: null, curLabel: "—",
-      wave: null, waveLabel: "—",
-      sst: null, sstLabel: "—",
-      flowDir: 90, flowSpeed: 0.03
-    };
-
-    function setBar(id, pct, color) {
-      var el = document.getElementById(id);
-      if (!el) return;
-      el.style.width = Math.max(0, Math.min(100, pct)) + "%";
-      if (color) el.style.background = color;
+  function buildThicknessField(lat, lon) {
+    if (!h3d.group) return;
+    while (h3d.group.children.length) {
+      var ch = h3d.group.children[0];
+      h3d.group.remove(ch);
+      if (ch.geometry) ch.geometry.dispose();
+      if (ch.material) {
+        if (Array.isArray(ch.material)) ch.material.forEach(function (m) { m.dispose(); });
+        else ch.material.dispose();
+      }
     }
+    h3d.nodes = [];
+
+    var wlList = nearestMany(lat, lon, stations, 60, 14);
+    var buoyList = nearestMany(lat, lon, buoyStations.filter(function (b) { return b.hasObs; }), 70, 10);
 
     var pending = [];
+    var nodeData = [];
 
-    if (wlSt) {
-      var nwl = document.getElementById("h3d-near-wl");
-      if (nwl) nwl.textContent = (wlSt.name || wlSt.id) + " · " + wlSt._dist.toFixed(1) + " km";
+    wlList.forEach(function (item) {
+      var s = item.s;
+      var node = {
+        id: s.id, name: s.name || s.id, kind: "wl",
+        lat: s.lat, lng: s.lng, dist: item.d,
+        wl: null, sst: null, wave: null, cur: null, curDir: null
+      };
+      nodeData.push(node);
       pending.push(
-        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(wlSt.id)
+        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
           + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json")
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (j) {
-            var v = j && j.data && j.data[0] && j.data[0].v;
-            if (v != null) {
-              metrics.wl = +v;
-              metrics.wlLabel = (+v).toFixed(2) + " ft MLLW";
-            }
+            if (j && j.data && j.data[0] && j.data[0].v != null) node.wl = +j.data[0].v;
           }).catch(function () {})
       );
       pending.push(
-        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(wlSt.id)
+        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
           + "&product=water_temperature&datum=MLLW&units=english&time_zone=gmt&format=json")
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (j) {
-            var v = j && j.data && j.data[0] && j.data[0].v;
-            if (v != null) {
-              metrics.sst = +v;
-              metrics.sstLabel = (+v).toFixed(1) + " °F";
-            }
+            if (j && j.data && j.data[0] && j.data[0].v != null) node.sst = +j.data[0].v;
           }).catch(function () {})
       );
       pending.push(
-        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(wlSt.id)
-          + "&product=currents&datum=MLLW&units=english&time_zone=gmt&format=json")
+        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+          + "&product=currents&units=english&time_zone=gmt&format=json")
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (j) {
-            var row = j && (j.data && j.data[0] || j.currents && j.currents[0]);
+            var row = j && ((j.data && j.data[0]) || (j.currents && j.currents[0]));
             if (row) {
-              var spd = row.s != null ? +row.s : (row.v != null ? +row.v : null);
-              var dir = row.d != null ? +row.d : null;
-              if (spd != null) {
-                metrics.current = spd;
-                metrics.curLabel = spd.toFixed(2) + " kn";
-                metrics.flowSpeed = 0.02 + Math.min(0.12, spd * 0.04);
-              }
-              if (dir != null) metrics.flowDir = dir;
+              if (row.s != null) node.cur = +row.s;
+              if (row.d != null) node.curDir = +row.d;
             }
           }).catch(function () {})
       );
-    } else {
-      var nwl2 = document.getElementById("h3d-near-wl");
-      if (nwl2) nwl2.textContent = "none nearby";
-    }
+    });
 
-    if (buoy) {
-      var nb = document.getElementById("h3d-near-buoy");
-      if (nb) nb.textContent = (buoy.name || buoy.id) + " · " + buoy._dist.toFixed(1) + " km";
-      if (buoy.wvht != null) {
-        var ft = typeof mToFt === "function" ? mToFt(buoy.wvht) : (+buoy.wvht * 3.28084);
-        metrics.wave = ft;
-        metrics.waveLabel = ft.toFixed(1) + " ft";
-      }
-      if (metrics.sst == null && buoy.wtmp != null) {
-        var f = typeof cToF === "function" ? cToF(buoy.wtmp) : (+buoy.wtmp * 9 / 5 + 32);
-        metrics.sst = f;
-        metrics.sstLabel = f.toFixed(0) + " °F";
-      }
-      if (metrics.current == null && buoy.wind != null) {
-        // surface drift proxy from wind (not true current)
-        var kt = typeof msToKt === "function" ? msToKt(buoy.wind) : (+buoy.wind * 1.94384);
-        metrics.flowSpeed = 0.02 + Math.min(0.08, kt * 0.008);
-        metrics.flowDir = buoy.wdir != null ? +buoy.wdir : 90;
-        if (metrics.curLabel === "—") metrics.curLabel = "proxy ~" + (kt * 0.03).toFixed(2) + " kn";
-      }
-    } else {
-      var nb2 = document.getElementById("h3d-near-buoy");
-      if (nb2) nb2.textContent = "none nearby";
-    }
+    buoyList.forEach(function (item) {
+      var b = item.s;
+      var node = {
+        id: b.id, name: b.name || b.id, kind: "buoy",
+        lat: b.lat, lng: b.lng, dist: item.d,
+        wl: null,
+        sst: b.wtmp != null ? (typeof cToF === "function" ? cToF(b.wtmp) : +b.wtmp * 9 / 5 + 32) : null,
+        wave: b.wvht != null ? (typeof mToFt === "function" ? mToFt(b.wvht) : +b.wvht * 3.28084) : null,
+        cur: null, curDir: b.wdir != null ? +b.wdir : null
+      };
+      nodeData.push(node);
+    });
 
     Promise.all(pending).then(function () {
-      h3d.metrics = metrics;
-      var mwl = document.getElementById("h3d-m-wl");
-      if (mwl) mwl.textContent = metrics.wlLabel;
-      var mc = document.getElementById("h3d-m-cur");
-      if (mc) mc.textContent = metrics.curLabel;
-      var mw = document.getElementById("h3d-m-wave");
-      if (mw) mw.textContent = metrics.waveLabel;
-      var ms = document.getElementById("h3d-m-sst");
-      if (ms) ms.textContent = metrics.sstLabel;
-
-      setBar("h3d-b-wl", metrics.wl != null ? Math.min(100, (metrics.wl / 10) * 100) : 5, "linear-gradient(90deg,#0369a1,#22d3ee)");
-      setBar("h3d-b-cur", metrics.current != null ? Math.min(100, metrics.current * 25) : (metrics.flowSpeed * 400), "linear-gradient(90deg,#0f766e,#2dd4bf)");
-      setBar("h3d-b-wave", metrics.wave != null ? Math.min(100, metrics.wave * 12) : 8, "linear-gradient(90deg,#1d4ed8,#60a5fa)");
-      setBar("h3d-b-sst", metrics.sst != null ? Math.min(100, ((metrics.sst - 40) / 50) * 100) : 10, "linear-gradient(90deg,#c2410c,#fbbf24)");
-
-      var flow = document.getElementById("h3d-flow");
-      if (flow) {
-        flow.textContent = metrics.current != null
-          ? ("Observed " + metrics.flowDir.toFixed(0) + "°")
-          : ("Surface estimate " + metrics.flowDir.toFixed(0) + "°");
-      }
+      h3d.nodes = nodeData;
+      renderThicknessColumns(lat, lon, nodeData);
+      var mode = document.getElementById("h3d-mode");
       if (mode) mode.textContent = "LIVE";
-      applyHydro3DScene(metrics);
+      var nn = document.getElementById("h3d-nodes");
+      if (nn) nn.textContent = String(nodeData.length);
     });
   }
 
-  function applyHydro3DScene(m) {
-    if (!h3d.water) return;
-    // Water color by SST
-    if (m.sst != null && h3d.water.material) {
-      // cold blue → warm teal/green
-      var t = Math.max(0, Math.min(1, (m.sst - 45) / 40));
-      var col = new THREE.Color().setHSL(0.55 - t * 0.25, 0.75, 0.28 + t * 0.12);
-      h3d.water.material.color.copy(col);
-    }
-    // Gauge float height from tide
-    if (h3d.gaugeFloat) {
-      var gy = 0.5 + (m.wl != null ? Math.max(-1, Math.min(4, m.wl * 0.35)) : 1.0);
-      h3d.gaugeFloat.position.y = gy;
-    }
+  function projectLocal(lat, lon, originLat, originLon) {
+    // rough meters → scene units (1 unit ≈ 3 km)
+    var dx = (lon - originLon) * 111 * Math.cos(originLat * Math.PI / 180);
+    var dz = (lat - originLat) * 111;
+    return { x: dx / 3, z: -dz / 3 };
+  }
+
+  function renderThicknessColumns(originLat, originLon, nodes) {
+    if (!h3d.group) return;
+    nodes.forEach(function (n) {
+      var p = projectLocal(n.lat, n.lng, originLat, originLon);
+      // clamp to grid
+      if (Math.abs(p.x) > 9.5 || Math.abs(p.z) > 9.5) {
+        var sc = 9.5 / Math.max(Math.abs(p.x), Math.abs(p.z));
+        p.x *= sc; p.z *= sc;
+      }
+
+      var wl = n.wl != null ? n.wl : (n.wave != null ? n.wave * 0.4 : 1.5);
+      var height = Math.max(0.35, Math.min(6.5, 0.4 + Math.abs(wl) * 0.45));
+      var col = tempColor(n.sst);
+
+      // Main thickness column (water level)
+      var geo = new THREE.BoxGeometry(0.55, height, 0.55);
+      var mat = new THREE.MeshStandardMaterial({
+        color: col, metalness: 0.25, roughness: 0.45,
+        emissive: col.clone().multiplyScalar(0.15)
+      });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(p.x, height / 2, p.z);
+      mesh.userData.node = n;
+      h3d.group.add(mesh);
+
+      // Wave cap (secondary thickness)
+      if (n.wave != null && n.wave > 0.2) {
+        var capH = Math.min(1.8, n.wave * 0.22);
+        var cap = new THREE.Mesh(
+          new THREE.BoxGeometry(0.62, capH, 0.62),
+          new THREE.MeshStandardMaterial({ color: 0x93c5fd, transparent: true, opacity: 0.7, metalness: 0.1, roughness: 0.3 })
+        );
+        cap.position.set(p.x, height + capH / 2, p.z);
+        h3d.group.add(cap);
+      }
+
+      // Flow arrow
+      if (n.cur != null || n.curDir != null) {
+        var dir = ((n.curDir != null ? n.curDir : 90) * Math.PI) / 180;
+        var len = 0.6 + Math.min(1.8, (n.cur || 0.5) * 0.5);
+        var arrow = new THREE.ArrowHelper(
+          new THREE.Vector3(Math.sin(dir), 0, -Math.cos(dir)).normalize(),
+          new THREE.Vector3(p.x, height + 0.15, p.z),
+          len, 0x2dd4bf, 0.25, 0.18
+        );
+        h3d.group.add(arrow);
+      }
+
+      // Clickable label sphere for picking
+      var hit = new THREE.Mesh(
+        new THREE.SphereGeometry(0.2, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.01 })
+      );
+      hit.position.set(p.x, height + 0.3, p.z);
+      hit.userData.node = n;
+      h3d.group.add(hit);
+    });
   }
 
   function animateHydro3D() {
     h3d.anim = requestAnimationFrame(animateHydro3D);
     if (!h3d.renderer || !h3d.scene || !h3d.camera) return;
     var t = performance.now() * 0.001;
-    var m = h3d.metrics || {};
-    var waveAmp = m.wave != null ? 0.08 + Math.min(0.55, m.wave * 0.06) : 0.12;
-    var tideBias = m.wl != null ? Math.max(-0.5, Math.min(1.2, m.wl * 0.08)) : 0;
-
-    if (h3d.water) {
-      var pos = h3d.water.geometry.attributes.position;
-      var base = h3d.water.userData.basePositions;
-      for (var i = 0; i < pos.count; i++) {
-        var x = base[i * 3];
-        var z = base[i * 3 + 2];
-        var y = tideBias
-          + Math.sin(x * 0.45 + t * 1.2) * waveAmp
-          + Math.cos(z * 0.38 + t * 0.9) * waveAmp * 0.7
-          + Math.sin((x + z) * 0.25 + t * 1.6) * waveAmp * 0.35;
-        pos.setY(i, y);
-      }
-      pos.needsUpdate = true;
-      h3d.water.geometry.computeVertexNormals();
-    }
-
-    if (h3d.particles) {
-      var p = h3d.particles.geometry.attributes.position;
-      var vel = h3d.particles.userData.vel;
-      var dir = ((m.flowDir != null ? m.flowDir : 90) * Math.PI) / 180;
-      var spd = m.flowSpeed != null ? m.flowSpeed : 0.03;
-      var vx = Math.sin(dir) * spd;
-      var vz = Math.cos(dir) * spd;
-      for (var j = 0; j < p.count; j++) {
-        var px = p.getX(j) + vx + (vel[j * 3] * 0.15);
-        var py = p.getY(j);
-        var pz = p.getZ(j) + vz + (vel[j * 3 + 2] * 0.15);
-        if (px > 12) px = -12;
-        if (px < -12) px = 12;
-        if (pz > 12) pz = -12;
-        if (pz < -12) pz = 12;
-        p.setXYZ(j, px, py, pz);
-      }
-      p.needsUpdate = true;
-    }
-
-    // Slow orbit camera
-    var R = 16;
-    h3d.camera.position.x = Math.sin(t * 0.08) * R;
-    h3d.camera.position.z = Math.cos(t * 0.08) * R;
-    h3d.camera.position.y = 7 + Math.sin(t * 0.15) * 0.8;
-    h3d.camera.lookAt(0, tideBias, 0);
-
+    h3d.camera.position.x = Math.sin(t * 0.12) * 16;
+    h3d.camera.position.z = Math.cos(t * 0.12) * 16;
+    h3d.camera.position.y = 11 + Math.sin(t * 0.2) * 1.2;
+    h3d.camera.lookAt(0, 1.5, 0);
     h3d.renderer.render(h3d.scene, h3d.camera);
+  }
+
+  // ---------- DOCKED DETAIL PANE (replaces float-only for stations/buoys) ----------
+  function showDetailPane(title, sub, htmlBody) {
+    var t = document.getElementById("detailTitle");
+    var s = document.getElementById("detailSub");
+    var b = document.getElementById("detailBody");
+    if (t) t.textContent = title || "Station detail";
+    if (s) s.textContent = sub || "";
+    if (b) b.innerHTML = htmlBody || "";
+  }
+
+  function openStationWindow(s) {
+    // Override: dock into detail pane instead of floating-only
+    var key = s.id;
+    var products = (s.products || []).join(", ") || "—";
+    showDetailPane(
+      s.name || s.id,
+      "CO-OPS " + s.id + (s.state ? " · " + s.state : ""),
+      '<div class="detail-loading muted">Loading live observations…</div>' +
+      '<div id="detailLive" class="meta-grid"></div>' +
+      '<div class="detail-section"><div class="ml">Station</div>' +
+      '<div class="meta-grid">' +
+        '<div class="meta-card"><div class="ml">ID</div><div class="mv mono">' + s.id + "</div></div>" +
+        '<div class="meta-card"><div class="ml">State</div><div class="mv">' + (s.state || "—") + "</div></div>" +
+        '<div class="meta-card"><div class="ml">Lat</div><div class="mv mono">' + fmtNum(s.lat, 4) + "</div></div>" +
+        '<div class="meta-card"><div class="ml">Lon</div><div class="mv mono">' + fmtNum(s.lng, 4) + "</div></div>" +
+        '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Products</div><div class="mv" style="font-size:11px">' + products + "</div></div>" +
+      "</div></div>" +
+      '<div class="chart-box" style="height:140px;margin-top:8px"><canvas id="detailChartWl"></canvas></div>' +
+      '<div class="btn-row">' +
+        '<button type="button" class="action-btn primary" id="detailCenter">Center map</button>' +
+        '<button type="button" class="action-btn" id="detailWatch">Watch</button>' +
+        '<button type="button" class="action-btn" id="detailSample3d">Sample 3D</button>' +
+      "</div>" +
+      '<div class="source-bar">Source: NOAA CO-OPS Data API · ' +
+        '<a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=' + encodeURIComponent(s.id) + '" target="_blank" rel="noopener">Official page ↗</a></div>'
+    );
+    setTimeout(function () {
+      var c = document.getElementById("detailCenter");
+      if (c) c.onclick = function () { if (map) map.setView([s.lat, s.lng], 11); };
+      var w = document.getElementById("detailWatch");
+      if (w) w.onclick = function () { toggleWatch(s); };
+      var sm = document.getElementById("detailSample3d");
+      if (sm) sm.onclick = function () { setHydroSample(s.lat, s.lng, null); };
+    }, 50);
+    loadDetailLive(s);
+    loadStationChart(s, "water_level", "detailChartWl", "detail_wl_" + s.id);
+  }
+
+  function loadDetailLive(s) {
+    var box = document.getElementById("detailLive");
+    if (!box) return;
+    var products = ["water_level", "water_temperature", "air_temperature", "wind", "air_pressure", "currents"];
+    Promise.all(products.map(function (p) {
+      return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+        + "&product=" + encodeURIComponent(p) + "&datum=MLLW&units=english&time_zone=gmt&format=json")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          var row = null;
+          if (j && j.data && j.data[0]) row = j.data[0];
+          else if (j && j.currents && j.currents[0]) row = j.currents[0];
+          return { product: p, data: row };
+        })
+        .catch(function () { return { product: p, data: null }; });
+    })).then(function (results) {
+      var loading = document.querySelector(".detail-loading");
+      if (loading) loading.remove();
+      var cards = results.filter(function (r) { return r.data; }).map(function (r) {
+        var label = r.product.replace(/_/g, " ");
+        var val = r.data.v != null ? r.data.v : (r.data.s != null ? r.data.s : "—");
+        var unit = "";
+        if (r.product === "water_level") unit = " ft MLLW";
+        if (r.product.indexOf("temp") >= 0) unit = " °F";
+        if (r.product === "wind") { val = r.data.s != null ? r.data.s : val; unit = " kn"; }
+        if (r.product === "air_pressure") unit = " mb";
+        if (r.product === "currents") { unit = " kn"; if (r.data.d != null) val = val + " @ " + r.data.d + "°"; }
+        return '<div class="meta-card"><div class="ml">' + label + '</div><div class="mv accent">' + val + unit + "</div></div>";
+      });
+      box.innerHTML = cards.length ? cards.join("") : '<div class="muted">No recent observations</div>';
+    });
+  }
+
+  function openBuoyWindow(b) {
+    var windKt = b.wind != null && typeof msToKt === "function" ? msToKt(b.wind).toFixed(1) : (b.wind != null ? b.wind : "—");
+    var gstKt = b.gst != null && typeof msToKt === "function" ? msToKt(b.gst).toFixed(1) : "—";
+    var atmpF = b.atmp != null && typeof fmtTempF === "function" ? fmtTempF(b.atmp) : "—";
+    var wtmpF = b.wtmp != null && typeof fmtTempF === "function" ? fmtTempF(b.wtmp) : "—";
+    var wvhtFt = b.wvht != null && typeof mToFt === "function" ? mToFt(b.wvht).toFixed(1) : "—";
+    var presIn = b.bar != null && typeof hpaToInHg === "function" ? hpaToInHg(b.bar).toFixed(2) : "—";
+    var wdir = b.wdir != null ? ((typeof degToCardinal === "function" ? degToCardinal(b.wdir) : "") + " (" + Math.round(+b.wdir) + "°)") : "—";
+
+    showDetailPane(
+      b.name || ("NDBC " + b.id),
+      "NDBC " + b.id + (b.hasObs ? " · live" : " · catalog"),
+      '<div class="meta-grid">' +
+        '<div class="meta-card"><div class="ml">Wind dir</div><div class="mv accent">' + wdir + "</div></div>" +
+        '<div class="meta-card"><div class="ml">Wind</div><div class="mv accent">' + windKt + " kts</div></div>" +
+        '<div class="meta-card"><div class="ml">Gust</div><div class="mv">' + gstKt + " kts</div></div>" +
+        '<div class="meta-card"><div class="ml">Wave ht</div><div class="mv">' + wvhtFt + " ft</div></div>" +
+        '<div class="meta-card"><div class="ml">Air temp</div><div class="mv">' + atmpF + " °F</div></div>" +
+        '<div class="meta-card"><div class="ml">Water temp</div><div class="mv accent">' + wtmpF + " °F</div></div>" +
+        '<div class="meta-card"><div class="ml">Pressure</div><div class="mv">' + presIn + " in</div></div>" +
+        '<div class="meta-card"><div class="ml">Observed</div><div class="mv" style="font-size:11px">' + (b.obsTime || "—") + "</div></div>" +
+      "</div>" +
+      '<div id="buoySeries_' + b.id + '" class="muted" style="margin-top:8px">Loading series…</div>' +
+      '<div class="btn-row">' +
+        '<button type="button" class="action-btn primary" id="detailCenter">Center map</button>' +
+        '<button type="button" class="action-btn" id="detailSample3d">Sample 3D</button>' +
+      "</div>" +
+      '<div class="source-bar">Source: NDBC latest_obs / realtime2 · ' +
+        '<a href="https://www.ndbc.noaa.gov/station_page.php?station=' + encodeURIComponent(b.id) + '" target="_blank" rel="noopener">Official page ↗</a></div>'
+    );
+    setTimeout(function () {
+      var c = document.getElementById("detailCenter");
+      if (c) c.onclick = function () { if (map) map.setView([b.lat, b.lng], 9); };
+      var sm = document.getElementById("detailSample3d");
+      if (sm) sm.onclick = function () { setHydroSample(b.lat, b.lng, null); };
+      // fake win for series loader
+      var fake = { querySelector: function (sel) { return document.querySelector(sel); } };
+      if (typeof loadBuoyRealtimeSeries === "function") loadBuoyRealtimeSeries(b, fake);
+    }, 50);
   }
 
 
