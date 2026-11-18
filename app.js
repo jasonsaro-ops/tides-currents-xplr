@@ -2627,7 +2627,7 @@
             root.style.setProperty("--left-w", w + "px");
           } else {
             const w = Math.min(420, Math.max(200, rect.right - ev.clientX));
-            root.style.setProperty("--right-w", w + "px");
+            /* right rail removed */ if (false) root.style.setProperty("--right-w", w + "px");
           }
           if (map) map.invalidateSize(true);
         }
@@ -2826,6 +2826,24 @@
     sampleLat: 39.9331, sampleLon: -75.142, sampleMarker: null, nodes: [],
     surface: null, wire: null, t0: 0
   };
+
+
+  // Left rail Filters | Stations tabs
+  function initLeftTabs() {
+    document.querySelectorAll(".left-tab").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var tab = btn.getAttribute("data-tab");
+        document.querySelectorAll(".left-tab").forEach(function (b) {
+          b.classList.toggle("active", b === btn);
+          b.setAttribute("aria-selected", b === btn ? "true" : "false");
+        });
+        var f = document.getElementById("leftTabFilters");
+        var s = document.getElementById("leftTabStations");
+        if (f) f.classList.toggle("hidden", tab !== "filters");
+        if (s) s.classList.toggle("hidden", tab !== "stations");
+      });
+    });
+  }
 
   function initHydro3D() {
     var canvas = document.getElementById("h3d-canvas");
@@ -3086,7 +3104,7 @@
       renderWaterTopoSurface(lat, lon, nodes);
       var mode = document.getElementById("h3d-mode");
       if (mode) mode.textContent = "TOPO · " + nodes.length + " sensors";
-      var cnt = document.getElementById("h3d-count");
+      var cnt = document.getElementById("h3d-nodes");
       if (cnt) cnt.textContent = String(nodes.length);
     });
   }

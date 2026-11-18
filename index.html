@@ -64,8 +64,12 @@
     </header>
 
     <main class="main-grid" id="mainGrid">
-      <aside class="rail left-rail" id="leftRail" aria-label="Filters and layers">
-        <div class="rail-scroll">
+      <aside class="rail left-rail" id="leftRail" aria-label="Filters, stations, and layers">
+        <div class="left-tabs" role="tablist">
+          <button type="button" class="left-tab active" data-tab="filters" role="tab" aria-selected="true">Filters</button>
+          <button type="button" class="left-tab" data-tab="stations" role="tab" aria-selected="false">Stations <span class="tab-badge" id="stationBadge">0</span></button>
+        </div>
+        <div class="rail-scroll" id="leftTabFilters">
           <section class="panel" data-panel="filters">
             <header class="panel-head">
               <h2>Filters</h2>
@@ -198,6 +202,41 @@
             </div>
           </section>
         </div>
+
+        <div class="rail-scroll hidden" id="leftTabStations">
+          <section class="panel" data-panel="stations">
+            <header class="panel-head">
+              <h2>Stations</h2>
+            </header>
+            <div class="panel-body">
+              <div class="quick-states" id="quickStates"></div>
+              <div class="station-list" id="stationList">
+                <div class="empty-state">Loading stations…</div>
+              </div>
+            </div>
+          </section>
+          <section class="panel" data-panel="watches">
+            <header class="panel-head">
+              <h2>Watch Strip</h2>
+              <button type="button" class="icon-btn" id="clearWatches" title="Clear all">×</button>
+            </header>
+            <div class="panel-body">
+              <div id="watchList" class="watch-list">
+                <div class="empty-state muted">Click a station → Add to watch</div>
+              </div>
+            </div>
+          </section>
+          <section class="panel" data-panel="usgs">
+            <header class="panel-head">
+              <h2>Sources</h2>
+            </header>
+            <div class="panel-body">
+              <label class="check"><input type="checkbox" data-usgs="streamflow" /><span>Streamflow</span></label>
+              <label class="check"><input type="checkbox" data-usgs="gage_height" /><span>Gage height</span></label>
+              <p class="muted" style="font-size:11px;margin-top:6px">Enable a layer to load nearby gauges.</p>
+            </div>
+          </section>
+        </div>
       </aside>
 
       <div class="splitter" data-split="left" id="splitLeft" title="Drag to resize"></div>
@@ -243,9 +282,9 @@
               <div class="h3d-view"><canvas id="h3d-canvas"></canvas></div>
               <div class="h3d-metrics compact" id="h3d-metrics">
                 <div class="row"><span class="k">Nodes</span><span class="v" id="h3d-nodes">0</span></div>
-                <div class="row"><span class="k">Channel</span><span class="v" id="h3d-channel">WL · SST · Wave · Flow</span></div>
+                <div class="row"><span class="k">Channel</span><span class="v" id="h3d-channel">Height · Color · Pins</span></div>
               </div>
-              <p class="h3d-disclaimer">3D columns = interpolated thickness from nearby CO-OPS / NDBC sensors. Not a hydrodynamic model.</p>
+              <p class="h3d-disclaimer">Water surface = IDW height field from nearby CO-OPS / NDBC. Pins = live sensors. Not a hydrodynamic model.</p>
             </div>
             <div class="detail-pane" id="detailPane">
               <header class="detail-head">
@@ -264,50 +303,6 @@
         </div>
       </section>
 
-      <div class="splitter" data-split="right" id="splitRight" title="Drag to resize"></div>
-
-      <aside class="rail right-rail" id="rightRail" aria-label="Stations and watches">
-        <div class="rail-scroll">
-          <section class="panel" data-panel="stations">
-            <header class="panel-head">
-              <h2>Stations</h2>
-              <span class="badge" id="stationBadge">0</span>
-            </header>
-            <div class="panel-body">
-              <div class="quick-states" id="quickStates"></div>
-              <div class="station-list" id="stationList">
-                <div class="empty-state">Loading stations…</div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel" data-panel="watches">
-            <header class="panel-head">
-              <h2>Watch Strip</h2>
-              <button type="button" class="icon-btn" id="clearWatches" title="Clear all">×</button>
-            </header>
-            <div class="panel-body">
-              <div id="watchList" class="watch-list">
-                <div class="empty-state muted">Click a station → Add to watch</div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel" data-panel="usgs">
-            <header class="panel-head">
-              <h2>Sources</h2>
-              <button type="button" class="icon-btn" id="refreshUsgs" title="Refresh">↻</button>
-            </header>
-            <div class="panel-body">
-              <div class="check-grid compact">
-                <label class="check"><input type="checkbox" data-usgs="streamflow" id="usgsStream" /><span>Streamflow</span></label>
-                <label class="check"><input type="checkbox" data-usgs="gage" id="usgsGage" /><span>Gage height</span></label>
-              </div>
-              <div id="usgsList" class="usgs-list muted">Enable a layer to load nearby gauges.</div>
-            </div>
-          </section>
-        </div>
-      </aside>
     </main>
 
     <div id="floatLayer" class="float-layer" aria-live="polite"></div>
