@@ -3068,6 +3068,29 @@
       mesh.userData.node = n;
       h3d.group.add(mesh);
 
+      // Height label sprite (canvas texture)
+      try {
+        var lab = document.createElement("canvas");
+        lab.width = 256; lab.height = 64;
+        var ctx = lab.getContext("2d");
+        ctx.fillStyle = "rgba(0,0,0,0.65)";
+        ctx.fillRect(0, 0, 256, 64);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "bold 22px Inter, sans-serif";
+        ctx.textAlign = "center";
+        var labText = (n.name || n.id).slice(0, 18);
+        ctx.fillText(labText, 128, 28);
+        ctx.font = "18px JetBrains Mono, monospace";
+        ctx.fillStyle = "#22d3ee";
+        var sub = (n.wl != null ? n.wl.toFixed(1) + " ft" : "") + (n.sst != null ? " · " + n.sst.toFixed(0) + "°F" : "");
+        ctx.fillText(sub || n.kind, 128, 52);
+        var tex = new THREE.CanvasTexture(lab);
+        var spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+        spr.scale.set(2.2, 0.55, 1);
+        spr.position.set(p.x, height + 0.85 + (n.wave != null ? Math.min(1.8, n.wave * 0.22) : 0), p.z);
+        h3d.group.add(spr);
+      } catch (e) {}
+
       // Wave cap (secondary thickness)
       if (n.wave != null && n.wave > 0.2) {
         var capH = Math.min(1.8, n.wave * 0.22);
@@ -3113,7 +3136,8 @@
     h3d.renderer.render(h3d.scene, h3d.camera);
   }
 
-  // ---------- DOCKED DETAIL PANE (replaces float-only for stations/buoys) ----------
+
+  // ---------- DOCKED DETAIL PANE: gauges + charts ----------
   function showDetailPane(title, sub, htmlBody) {
     var t = document.getElementById("detailTitle");
     var s = document.getElementById("detailSub");
@@ -3123,47 +3147,100 @@
     if (b) b.innerHTML = htmlBody || "";
   }
 
+  /** SVG ring gauge */
+  function ringGauge(id, label, value, unit, min, max, color) {
+    var v = value != null && !isNaN(+value) ? +value : null;
+    var pct = v == null ? 0 : Math.max(0, Math.min(1, (v - min) / (max - min || 1)));
+    var r = 36, c = 2 * Math.PI * r;
+    var dash = (pct * c).toFixed(1);
+    var display = v == null ? "—" : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+    return (
+      '<div class="gauge-card" id="' + id + '">' +
+        '<svg viewBox="0 0 100 100" class="gauge-svg">' +
+          '<circle class="g-track" cx="50" cy="50" r="' + r + '" />' +
+          '<circle class="g-value" cx="50" cy="50" r="' + r + '" stroke="' + color + '" ' +
+            'stroke-dasharray="' + dash + ' ' + c.toFixed(1) + '" transform="rotate(-90 50 50)" />' +
+          '<text x="50" y="48" class="g-num">' + display + "</text>" +
+          '<text x="50" y="62" class="g-unit">' + unit + "</text>" +
+        "</svg>" +
+        '<div class="g-label">' + label + "</div>" +
+      "</div>"
+    );
+  }
+
+  function destroyDetailCharts() {
+    ["detail_wl", "detail_pred", "detail_buoy_wspd", "detail_buoy_wtmp", "detail_buoy_wvht"].forEach(function (k) {
+      if (chartInstances.has(k)) {
+        try { chartInstances.get(k).destroy(); } catch (e) {}
+        chartInstances.delete(k);
+      }
+    });
+  }
+
   function openStationWindow(s) {
-    // Override: dock into detail pane instead of floating-only
-    var key = s.id;
+    destroyDetailCharts();
     var products = (s.products || []).join(", ") || "—";
     showDetailPane(
       s.name || s.id,
       "CO-OPS " + s.id + (s.state ? " · " + s.state : ""),
-      '<div class="detail-loading muted">Loading live observations…</div>' +
-      '<div id="detailLive" class="meta-grid"></div>' +
-      '<div class="detail-section"><div class="ml">Station</div>' +
-      '<div class="meta-grid">' +
-        '<div class="meta-card"><div class="ml">ID</div><div class="mv mono">' + s.id + "</div></div>" +
-        '<div class="meta-card"><div class="ml">State</div><div class="mv">' + (s.state || "—") + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Lat</div><div class="mv mono">' + fmtNum(s.lat, 4) + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Lon</div><div class="mv mono">' + fmtNum(s.lng, 4) + "</div></div>" +
-        '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Products</div><div class="mv" style="font-size:11px">' + products + "</div></div>" +
-      "</div></div>" +
-      '<div class="chart-box" style="height:140px;margin-top:8px"><canvas id="detailChartWl"></canvas></div>' +
+      '<div class="gauge-row" id="detailGauges">' +
+        ringGauge("g_wl", "Water level", null, "ft", 0, 10, "#22d3ee") +
+        ringGauge("g_wtmp", "Water °F", null, "°F", 35, 90, "#38bdf8") +
+        ringGauge("g_atmp", "Air °F", null, "°F", 20, 100, "#fbbf24") +
+        ringGauge("g_wind", "Wind", null, "kn", 0, 40, "#a78bfa") +
+      "</div>" +
+      '<div class="meta-grid" id="detailLive"></div>' +
+      '<div class="chart-block"><div class="chart-label">Water level · last 48 h (ft MLLW)</div>' +
+        '<div class="chart-box tall"><canvas id="detailChartWl"></canvas></div></div>' +
+      '<div class="chart-block"><div class="chart-label">Tide predictions · next 48 h</div>' +
+        '<div class="chart-box tall"><canvas id="detailChartPred"></canvas></div></div>' +
+      '<div class="detail-section"><div class="ml">Station metadata</div>' +
+        '<div class="meta-grid">' +
+          '<div class="meta-card"><div class="ml">ID</div><div class="mv mono">' + s.id + "</div></div>" +
+          '<div class="meta-card"><div class="ml">State</div><div class="mv">' + (s.state || "—") + "</div></div>" +
+          '<div class="meta-card"><div class="ml">Lat</div><div class="mv mono">' + fmtNum(s.lat, 4) + "</div></div>" +
+          '<div class="meta-card"><div class="ml">Lon</div><div class="mv mono">' + fmtNum(s.lng, 4) + "</div></div>" +
+          '<div class="meta-card" style="grid-column:1/-1"><div class="ml">Products</div><div class="mv" style="font-size:11px">' + products + "</div></div>" +
+        "</div></div>" +
       '<div class="btn-row">' +
         '<button type="button" class="action-btn primary" id="detailCenter">Center map</button>' +
         '<button type="button" class="action-btn" id="detailWatch">Watch</button>' +
         '<button type="button" class="action-btn" id="detailSample3d">Sample 3D</button>' +
       "</div>" +
-      '<div class="source-bar">Source: NOAA CO-OPS Data API · ' +
+      '<div class="source-bar">Source: NOAA CO-OPS · ' +
         '<a href="https://tidesandcurrents.noaa.gov/stationhome.html?id=' + encodeURIComponent(s.id) + '" target="_blank" rel="noopener">Official page ↗</a></div>'
     );
     setTimeout(function () {
       var c = document.getElementById("detailCenter");
       if (c) c.onclick = function () { if (map) map.setView([s.lat, s.lng], 11); };
       var w = document.getElementById("detailWatch");
-      if (w) w.onclick = function () { toggleWatch(s); };
+      if (w) w.onclick = function () { if (typeof toggleWatch === "function") toggleWatch(s); };
       var sm = document.getElementById("detailSample3d");
       if (sm) sm.onclick = function () { setHydroSample(s.lat, s.lng, null); };
-    }, 50);
-    loadDetailLive(s);
-    loadStationChart(s, "water_level", "detailChartWl", "detail_wl_" + s.id);
+    }, 40);
+    loadDetailLiveRich(s);
+    loadStationChart(s, "water_level", "detailChartWl", "detail_wl");
+    loadStationChart(s, "predictions", "detailChartPred", "detail_pred");
+    setHydroSample(s.lat, s.lng, null);
   }
 
-  function loadDetailLive(s) {
+  function updateGauge(id, value, min, max, color) {
+    var card = document.getElementById(id);
+    if (!card) return;
+    var v = value != null && !isNaN(+value) ? +value : null;
+    var pct = v == null ? 0 : Math.max(0, Math.min(1, (v - min) / (max - min || 1)));
+    var r = 36, circ = 2 * Math.PI * r;
+    var circle = card.querySelector(".g-value");
+    var num = card.querySelector(".g-num");
+    if (circle) {
+      circle.setAttribute("stroke-dasharray", (pct * circ).toFixed(1) + " " + circ.toFixed(1));
+      if (color) circle.setAttribute("stroke", color);
+    }
+    if (num) num.textContent = v == null ? "—" : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+  }
+
+  function loadDetailLiveRich(s) {
     var box = document.getElementById("detailLive");
-    if (!box) return;
     var products = ["water_level", "water_temperature", "air_temperature", "wind", "air_pressure", "currents"];
     Promise.all(products.map(function (p) {
       return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
@@ -3177,51 +3254,69 @@
         })
         .catch(function () { return { product: p, data: null }; });
     })).then(function (results) {
-      var loading = document.querySelector(".detail-loading");
-      if (loading) loading.remove();
+      var map = {};
+      results.forEach(function (r) { map[r.product] = r.data; });
+      if (map.water_level && map.water_level.v != null) updateGauge("g_wl", +map.water_level.v, 0, 12, "#22d3ee");
+      if (map.water_temperature && map.water_temperature.v != null) updateGauge("g_wtmp", +map.water_temperature.v, 35, 90, "#38bdf8");
+      if (map.air_temperature && map.air_temperature.v != null) updateGauge("g_atmp", +map.air_temperature.v, 20, 100, "#fbbf24");
+      if (map.wind && map.wind.s != null) updateGauge("g_wind", +map.wind.s, 0, 40, "#a78bfa");
+
+      if (!box) return;
       var cards = results.filter(function (r) { return r.data; }).map(function (r) {
         var label = r.product.replace(/_/g, " ");
         var val = r.data.v != null ? r.data.v : (r.data.s != null ? r.data.s : "—");
         var unit = "";
         if (r.product === "water_level") unit = " ft MLLW";
         if (r.product.indexOf("temp") >= 0) unit = " °F";
-        if (r.product === "wind") { val = r.data.s != null ? r.data.s : val; unit = " kn"; }
+        if (r.product === "wind") { val = r.data.s != null ? r.data.s : val; unit = " kn"; if (r.data.d != null) val = val + " @ " + r.data.d + "°"; }
         if (r.product === "air_pressure") unit = " mb";
         if (r.product === "currents") { unit = " kn"; if (r.data.d != null) val = val + " @ " + r.data.d + "°"; }
-        return '<div class="meta-card"><div class="ml">' + label + '</div><div class="mv accent">' + val + unit + "</div></div>";
+        var t = r.data.t ? '<div class="ml" style="opacity:.7">' + r.data.t + " UTC</div>" : "";
+        return '<div class="meta-card"><div class="ml">' + label + "</div><div class=\"mv accent\">" + val + unit + "</div>" + t + "</div>";
       });
       box.innerHTML = cards.length ? cards.join("") : '<div class="muted">No recent observations</div>';
     });
   }
 
   function openBuoyWindow(b) {
-    var windKt = b.wind != null && typeof msToKt === "function" ? msToKt(b.wind).toFixed(1) : (b.wind != null ? b.wind : "—");
-    var gstKt = b.gst != null && typeof msToKt === "function" ? msToKt(b.gst).toFixed(1) : "—";
-    var atmpF = b.atmp != null && typeof fmtTempF === "function" ? fmtTempF(b.atmp) : "—";
-    var wtmpF = b.wtmp != null && typeof fmtTempF === "function" ? fmtTempF(b.wtmp) : "—";
-    var wvhtFt = b.wvht != null && typeof mToFt === "function" ? mToFt(b.wvht).toFixed(1) : "—";
-    var presIn = b.bar != null && typeof hpaToInHg === "function" ? hpaToInHg(b.bar).toFixed(2) : "—";
-    var wdir = b.wdir != null ? ((typeof degToCardinal === "function" ? degToCardinal(b.wdir) : "") + " (" + Math.round(+b.wdir) + "°)") : "—";
+    destroyDetailCharts();
+    var windKt = b.wind != null && typeof msToKt === "function" ? msToKt(b.wind) : (b.wind != null ? +b.wind : null);
+    var gstKt = b.gst != null && typeof msToKt === "function" ? msToKt(b.gst) : null;
+    var atmpF = b.atmp != null && typeof cToF === "function" ? cToF(b.atmp) : null;
+    var wtmpF = b.wtmp != null && typeof cToF === "function" ? cToF(b.wtmp) : null;
+    var wvhtFt = b.wvht != null && typeof mToFt === "function" ? mToFt(b.wvht) : null;
+    var presIn = b.bar != null && typeof hpaToInHg === "function" ? hpaToInHg(b.bar) : null;
+    var wdir = b.wdir != null
+      ? ((typeof degToCardinal === "function" ? degToCardinal(b.wdir) : "") + " (" + Math.round(+b.wdir) + "°)")
+      : "—";
 
     showDetailPane(
       b.name || ("NDBC " + b.id),
-      "NDBC " + b.id + (b.hasObs ? " · live" : " · catalog"),
+      "NDBC " + b.id + (b.hasObs ? " · live obs" : " · catalog"),
+      '<div class="gauge-row">' +
+        ringGauge("g_wind", "Wind", windKt, "kts", 0, 40, "#a78bfa") +
+        ringGauge("g_gst", "Gust", gstKt, "kts", 0, 50, "#f472b6") +
+        ringGauge("g_wtmp", "Water °F", wtmpF, "°F", 35, 90, "#38bdf8") +
+        ringGauge("g_atmp", "Air °F", atmpF, "°F", 20, 100, "#fbbf24") +
+        ringGauge("g_wave", "Waves", wvhtFt, "ft", 0, 20, "#2dd4bf") +
+        ringGauge("g_pres", "Pressure", presIn, "in", 28.5, 31.5, "#4ade80") +
+      "</div>" +
       '<div class="meta-grid">' +
         '<div class="meta-card"><div class="ml">Wind dir</div><div class="mv accent">' + wdir + "</div></div>" +
-        '<div class="meta-card"><div class="ml">Wind</div><div class="mv accent">' + windKt + " kts</div></div>" +
-        '<div class="meta-card"><div class="ml">Gust</div><div class="mv">' + gstKt + " kts</div></div>" +
-        '<div class="meta-card"><div class="ml">Wave ht</div><div class="mv">' + wvhtFt + " ft</div></div>" +
-        '<div class="meta-card"><div class="ml">Air temp</div><div class="mv">' + atmpF + " °F</div></div>" +
-        '<div class="meta-card"><div class="ml">Water temp</div><div class="mv accent">' + wtmpF + " °F</div></div>" +
-        '<div class="meta-card"><div class="ml">Pressure</div><div class="mv">' + presIn + " in</div></div>" +
         '<div class="meta-card"><div class="ml">Observed</div><div class="mv" style="font-size:11px">' + (b.obsTime || "—") + "</div></div>" +
       "</div>" +
-      '<div id="buoySeries_' + b.id + '" class="muted" style="margin-top:8px">Loading series…</div>' +
+      '<div class="chart-block"><div class="chart-label">Historical · wind speed (kts)</div>' +
+        '<div class="chart-box tall"><canvas id="buoyChartWind"></canvas></div></div>' +
+      '<div class="chart-block"><div class="chart-label">Historical · water temp (°F)</div>' +
+        '<div class="chart-box tall"><canvas id="buoyChartTemp"></canvas></div></div>' +
+      '<div class="chart-block"><div class="chart-label">Historical · wave height (ft)</div>' +
+        '<div class="chart-box tall"><canvas id="buoyChartWave"></canvas></div></div>' +
+      '<div id="buoySeriesTable" class="buoy-obs-scroll muted" style="max-height:120px;margin-top:8px">Loading series…</div>' +
       '<div class="btn-row">' +
         '<button type="button" class="action-btn primary" id="detailCenter">Center map</button>' +
         '<button type="button" class="action-btn" id="detailSample3d">Sample 3D</button>' +
       "</div>" +
-      '<div class="source-bar">Source: NDBC latest_obs / realtime2 · ' +
+      '<div class="source-bar">Source: NDBC · ' +
         '<a href="https://www.ndbc.noaa.gov/station_page.php?station=' + encodeURIComponent(b.id) + '" target="_blank" rel="noopener">Official page ↗</a></div>'
     );
     setTimeout(function () {
@@ -3229,11 +3324,137 @@
       if (c) c.onclick = function () { if (map) map.setView([b.lat, b.lng], 9); };
       var sm = document.getElementById("detailSample3d");
       if (sm) sm.onclick = function () { setHydroSample(b.lat, b.lng, null); };
-      // fake win for series loader
-      var fake = { querySelector: function (sel) { return document.querySelector(sel); } };
-      if (typeof loadBuoyRealtimeSeries === "function") loadBuoyRealtimeSeries(b, fake);
-    }, 50);
+      loadBuoyChartsRich(b);
+    }, 40);
+    setHydroSample(b.lat, b.lng, null);
   }
 
+  function loadBuoyChartsRich(b) {
+    function parseAndDraw(rows) {
+      if (!rows || !rows.length) {
+        var el = document.getElementById("buoySeriesTable");
+        if (el) el.textContent = "No historical series available for this buoy.";
+        return;
+      }
+      // newest first → reverse for charts
+      var chrono = rows.slice().reverse();
+      var labels = chrono.map(function (r) {
+        return (r.time || "").slice(5, 16);
+      });
+      function series(getter) {
+        return chrono.map(function (r) {
+          var v = getter(r);
+          return v == null || isNaN(v) ? null : v;
+        });
+      }
+      drawBuoyLine("buoyChartWind", "detail_buoy_wspd", labels, series(function (r) {
+        return r.wspd != null && typeof msToKt === "function" ? msToKt(r.wspd) : r.wspd;
+      }), "Wind kts", "#a78bfa");
+      drawBuoyLine("buoyChartTemp", "detail_buoy_wtmp", labels, series(function (r) {
+        return r.wtmp != null && typeof cToF === "function" ? cToF(r.wtmp) : r.wtmp;
+      }), "Water °F", "#38bdf8");
+      drawBuoyLine("buoyChartWave", "detail_buoy_wvht", labels, series(function (r) {
+        return r.wvht != null && typeof mToFt === "function" ? mToFt(r.wvht) : r.wvht;
+      }), "Wave ft", "#2dd4bf");
+
+      // compact table (last 15)
+      var el = document.getElementById("buoySeriesTable");
+      if (el) {
+        var show = rows.slice(0, 15);
+        var html = '<table class="buoy-obs-table"><thead><tr><th>Time</th><th>WDIR</th><th>WSPD</th><th>GST</th><th>WVHT</th><th>WTMP</th></tr></thead><tbody>';
+        show.forEach(function (r) {
+          html += "<tr><td class=\"mono\">" + (r.time || "") + "</td>"
+            + "<td>" + (r.wdir != null ? Math.round(r.wdir) : "—") + "</td>"
+            + "<td>" + (r.wspd != null && typeof msToKt === "function" ? msToKt(r.wspd).toFixed(1) : "—") + "</td>"
+            + "<td>" + (r.gst != null && typeof msToKt === "function" ? msToKt(r.gst).toFixed(1) : "—") + "</td>"
+            + "<td>" + (r.wvht != null && typeof mToFt === "function" ? mToFt(r.wvht).toFixed(1) : "—") + "</td>"
+            + "<td>" + (r.wtmp != null && typeof cToF === "function" ? cToF(r.wtmp).toFixed(0) : "—") + "</td></tr>";
+        });
+        html += "</tbody></table>";
+        el.innerHTML = html;
+        el.classList.remove("muted");
+      }
+    }
+
+    // local series then live
+    fetch("data/ndbc-series/" + encodeURIComponent(b.id) + ".json", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("no local"); return r.json(); })
+      .then(function (j) {
+        var rows = Array.isArray(j) ? j : (j.rows || []);
+        if (!rows.length) throw new Error("empty");
+        parseAndDraw(rows);
+      })
+      .catch(function () {
+        if (typeof corsText !== "function") {
+          parseAndDraw([]);
+          return;
+        }
+        corsText("https://www.ndbc.noaa.gov/data/realtime2/" + encodeURIComponent(b.id) + ".txt")
+          .then(function (txt) {
+            var rows = typeof parseNdbcRealtimeText === "function" ? parseNdbcRealtimeText(txt) : [];
+            parseAndDraw(rows);
+          })
+          .catch(function () { parseAndDraw([]); });
+      });
+  }
+
+  function drawBuoyLine(canvasId, key, labels, data, label, color) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === "undefined") return;
+    if (chartInstances.has(key)) {
+      try { chartInstances.get(key).destroy(); } catch (e) {}
+    }
+    var has = data.some(function (v) { return v != null; });
+    if (!has) {
+      var p = canvas.parentElement;
+      if (p) {
+        var m = document.createElement("div");
+        m.className = "muted";
+        m.style.padding = "8px";
+        m.textContent = "No " + label + " in series";
+        p.appendChild(m);
+      }
+      return;
+    }
+    var chart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: label,
+          data: data,
+          borderColor: color,
+          backgroundColor: color + "33",
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+          borderWidth: 2,
+          spanGaps: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode: "index", intersect: false }
+        },
+        scales: {
+          x: {
+            ticks: { color: "#64748b", maxTicksLimit: 6, font: { size: 9 } },
+            grid: { color: "rgba(255,255,255,0.04)" }
+          },
+          y: {
+            ticks: { color: "#94a3b8", font: { size: 10 } },
+            grid: { color: "rgba(255,255,255,0.06)" }
+          }
+        }
+      }
+    });
+    chartInstances.set(key, chart);
+  }
+
+  // Improve thickness columns: labels + stronger colors
+  var _origRender = typeof renderThicknessColumns === "function" ? renderThicknessColumns : null;
 
 })();
