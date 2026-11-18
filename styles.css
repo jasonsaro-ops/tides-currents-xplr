@@ -1215,3 +1215,18 @@ button, input, select { font: inherit; color: inherit; }
 .viz-split {
   grid-template-rows: minmax(180px, 0.42fr) minmax(260px, 0.58fr);
 }
+
+/* Water topo canvas */
+.h3d-view {
+  background: radial-gradient(ellipse at 50% 30%, #0c1a2e 0%, #050a12 70%);
+}
+.h3d-title { letter-spacing: 0.06em; }
+.h3d-mode {
+  font-family: var(--mono), ui-monospace, monospace;
+  font-size: 10px;
+  color: #22d3ee;
+  background: rgba(34,211,238,0.08);
+  border: 1px solid rgba(34,211,238,0.25);
+  border-radius: 4px;
+  padding: 2px 6px;
+}

@@ -30,7 +30,7 @@
         </button>
         <div class="brand">
           <span class="brand-title">TIDES &amp; CURRENTS ENHANCED</span>
-          <span class="brand-sub">MULTI-CHANNEL · NOAA CO-OPS / NDBC</span>
+          <span class="brand-sub">WATER TOPO · NOAA CO-OPS / NDBC</span>
         </div>
       </div>
 
@@ -217,21 +217,21 @@
             </div>
             <div class="map-hint" id="mapHint">Click map to sample location for 3D hydro</div>
           </div>
-          <aside class="viz-rail" id="vizRail" aria-label="Thickness map and station detail">
+          <aside class="viz-rail" id="vizRail" aria-label="Water height topo and station detail">
           <div class="viz-split">
             <div class="thickness-pane" id="thicknessPane">
               <header class="h3d-head">
                 <div>
-                  <div class="h3d-title">MULTI-CHANNEL THICKNESS</div>
+                  <div class="h3d-title">WATER HEIGHT TOPO</div>
                   <div class="h3d-sub" id="h3d-loc">Sample a point or click a station</div>
                 </div>
                 <div class="h3d-mode" id="h3d-mode">IDLE</div>
               </header>
               <div class="channel-legend" id="channelLegend">
                 <div class="ch"><i class="c-wl"></i> Height = water level (ft MLLW)</div>
-                <div class="ch"><i class="c-sst"></i> Color = water temp (°F)</div>
-                <div class="ch"><i class="c-wave"></i> Cap = wave height (ft)</div>
-                <div class="ch"><i class="c-flow"></i> Arrows = current / flow</div>
+                <div class="ch"><i class="c-sst"></i> Color = temp / level anomaly</div>
+                <div class="ch"><i class="c-wave"></i> Pins = stations & buoys</div>
+                <div class="ch"><i class="c-flow"></i> Surface = IDW field around sample</div>
               </div>
               <div class="h3d-presets" id="h3d-presets">
                 <button type="button" data-preset="phl" data-lat="39.9331" data-lon="-75.142">Philadelphia</button>

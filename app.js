@@ -2817,17 +2817,20 @@
 
 
   
-  // ========== MULTI-CHANNEL THICKNESS MAP (Three.js) ==========
-  // Channels: height=WL, color=SST, cap=waves, arrows=current
+
+  // ========== WATER TOPO SURFACE (Three.js) ==========
+  // 3D height field = interpolated water level around sample point
+  // Color = temp / anomaly · contour-style stepped mesh · station pins
   var h3d = {
     renderer: null, scene: null, camera: null, group: null, anim: null, _ro: null,
-    sampleLat: 39.9331, sampleLon: -75.142, sampleMarker: null, nodes: []
+    sampleLat: 39.9331, sampleLon: -75.142, sampleMarker: null, nodes: [],
+    surface: null, wire: null, t0: 0
   };
 
   function initHydro3D() {
     var canvas = document.getElementById("h3d-canvas");
     if (!canvas || typeof THREE === "undefined") {
-      console.warn("Thickness map: Three.js missing");
+      console.warn("Water topo: Three.js missing");
       return;
     }
     var view = canvas.parentElement;
@@ -2837,32 +2840,27 @@
     h3d.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
     h3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     h3d.renderer.setSize(w, h, false);
-    h3d.renderer.setClearColor(0x060a10, 1);
+    h3d.renderer.setClearColor(0x050a12, 1);
 
     h3d.scene = new THREE.Scene();
-    h3d.scene.fog = new THREE.FogExp2(0x060a10, 0.028);
+    h3d.scene.fog = new THREE.FogExp2(0x050a12, 0.022);
 
-    h3d.camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 200);
-    h3d.camera.position.set(14, 12, 14);
-    h3d.camera.lookAt(0, 0, 0);
+    h3d.camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 200);
+    h3d.camera.position.set(0, 16, 18);
+    h3d.camera.lookAt(0, 1.5, 0);
 
-    h3d.scene.add(new THREE.AmbientLight(0x88aacc, 0.55));
-    var dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(8, 18, 6);
+    h3d.scene.add(new THREE.AmbientLight(0xa0c4e8, 0.65));
+    var dir = new THREE.DirectionalLight(0xffffff, 1.05);
+    dir.position.set(10, 22, 8);
     h3d.scene.add(dir);
+    var fill = new THREE.DirectionalLight(0x38bdf8, 0.35);
+    fill.position.set(-8, 6, -10);
+    h3d.scene.add(fill);
 
-    var grid = new THREE.GridHelper(20, 20, 0x1e3a5f, 0x0f172a);
+    // Subtle reference grid at zero plane
+    var grid = new THREE.GridHelper(24, 24, 0x1e3a5f, 0x0b1220);
     grid.position.y = 0;
     h3d.scene.add(grid);
-
-    // Base water plane (thin reference)
-    var plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(20, 20),
-      new THREE.MeshStandardMaterial({ color: 0x0c4a6e, transparent: true, opacity: 0.35, metalness: 0.2, roughness: 0.8 })
-    );
-    plane.rotation.x = -Math.PI / 2;
-    plane.position.y = 0.01;
-    h3d.scene.add(plane);
 
     h3d.group = new THREE.Group();
     h3d.scene.add(h3d.group);
@@ -2930,13 +2928,13 @@
       }
     }
     var mode = document.getElementById("h3d-mode");
-    if (mode) mode.textContent = "LOADING…";
-    buildThicknessField(lat, lon);
+    if (mode) mode.textContent = "BUILDING TOPO…";
+    buildWaterTopo(lat, lon);
   }
 
   function nearestMany(lat, lon, list, maxKm, limit) {
-    maxKm = maxKm || 55;
-    limit = limit || 12;
+    maxKm = maxKm || 80;
+    limit = limit || 18;
     var scored = [];
     (list || []).forEach(function (s) {
       if (s.lat == null || s.lng == null) return;
@@ -2947,16 +2945,41 @@
     return scored.slice(0, limit);
   }
 
-  function tempColor(f) {
-    // 40F deep blue → 55 teal → 70 green → 80 yellow → 90 orange
-    if (f == null || isNaN(f)) return new THREE.Color(0x64748b);
-    var t = Math.max(0, Math.min(1, (f - 40) / 50));
-    var c = new THREE.Color();
-    c.setHSL(0.58 - t * 0.55, 0.75, 0.42);
-    return c;
+  // Viridis-like ramp for water height anomaly / temp
+  function heightColor(t) {
+    // t 0..1
+    t = Math.max(0, Math.min(1, t));
+    var stops = [
+      [0.00, [13, 8, 135]],
+      [0.15, [70, 3, 159]],
+      [0.30, [125, 0, 142]],
+      [0.45, [170, 30, 110]],
+      [0.55, [200, 70, 60]],
+      [0.70, [225, 130, 30]],
+      [0.85, [240, 190, 40]],
+      [1.00, [250, 250, 120]]
+    ];
+    var a = stops[0], b = stops[stops.length - 1];
+    for (var i = 0; i < stops.length - 1; i++) {
+      if (t >= stops[i][0] && t <= stops[i + 1][0]) {
+        a = stops[i]; b = stops[i + 1];
+        break;
+      }
+    }
+    var u = (t - a[0]) / ((b[0] - a[0]) || 1);
+    var r = Math.round(a[1][0] + (b[1][0] - a[1][0]) * u);
+    var g = Math.round(a[1][1] + (b[1][1] - a[1][1]) * u);
+    var bl = Math.round(a[1][2] + (b[1][2] - a[1][2]) * u);
+    return new THREE.Color(r / 255, g / 255, bl / 255);
   }
 
-  function buildThicknessField(lat, lon) {
+  function tempColor(f) {
+    if (f == null || isNaN(f)) return new THREE.Color(0x64748b);
+    var t = (f - 40) / 50; // 40–90°F
+    return heightColor(t);
+  }
+
+  function clearHydroGroup() {
     if (!h3d.group) return;
     while (h3d.group.children.length) {
       var ch = h3d.group.children[0];
@@ -2966,176 +2989,307 @@
         if (Array.isArray(ch.material)) ch.material.forEach(function (m) { m.dispose(); });
         else ch.material.dispose();
       }
+      if (ch.material && ch.material.map) ch.material.map.dispose();
     }
+    h3d.surface = null;
+    h3d.wire = null;
     h3d.nodes = [];
+  }
 
-    var wlList = nearestMany(lat, lon, stations, 60, 14);
-    var buoyList = nearestMany(lat, lon, buoyStations.filter(function (b) { return b.hasObs; }), 70, 10);
+  /** Inverse-distance interpolation of water level at (lat,lon) from sensor nodes */
+  function idw(lat, lon, nodes, power) {
+    power = power || 2;
+    var num = 0, den = 0, nKnown = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.wl == null || isNaN(n.wl)) continue;
+      nKnown++;
+      var d = Math.max(0.15, haversineKm(lat, lon, n.lat, n.lng));
+      var w = 1 / Math.pow(d, power);
+      num += n.wl * w;
+      den += w;
+    }
+    if (den === 0 || nKnown === 0) return null;
+    return num / den;
+  }
 
-    var pending = [];
-    var nodeData = [];
+  function idwTemp(lat, lon, nodes) {
+    var num = 0, den = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.sst == null || isNaN(n.sst)) continue;
+      var d = Math.max(0.15, haversineKm(lat, lon, n.lat, n.lng));
+      var w = 1 / (d * d);
+      num += n.sst * w;
+      den += w;
+    }
+    return den ? num / den : null;
+  }
 
-    wlList.forEach(function (item) {
-      var s = item.s;
-      var node = {
-        id: s.id, name: s.name || s.id, kind: "wl",
-        lat: s.lat, lng: s.lng, dist: item.d,
-        wl: null, sst: null, wave: null, cur: null, curDir: null
-      };
-      nodeData.push(node);
-      pending.push(
-        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
-          + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json")
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (j) {
-            if (j && j.data && j.data[0] && j.data[0].v != null) node.wl = +j.data[0].v;
-          }).catch(function () {})
-      );
-      pending.push(
-        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
-          + "&product=water_temperature&datum=MLLW&units=english&time_zone=gmt&format=json")
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (j) {
-            if (j && j.data && j.data[0] && j.data[0].v != null) node.sst = +j.data[0].v;
-          }).catch(function () {})
-      );
-      pending.push(
-        fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
-          + "&product=currents&units=english&time_zone=gmt&format=json")
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (j) {
-            var row = j && ((j.data && j.data[0]) || (j.currents && j.currents[0]));
-            if (row) {
-              if (row.s != null) node.cur = +row.s;
-              if (row.d != null) node.curDir = +row.d;
-            }
-          }).catch(function () {})
-      );
-    });
-
-    buoyList.forEach(function (item) {
-      var b = item.s;
-      var node = {
-        id: b.id, name: b.name || b.id, kind: "buoy",
-        lat: b.lat, lng: b.lng, dist: item.d,
-        wl: null,
-        sst: b.wtmp != null ? (typeof cToF === "function" ? cToF(b.wtmp) : +b.wtmp * 9 / 5 + 32) : null,
-        wave: b.wvht != null ? (typeof mToFt === "function" ? mToFt(b.wvht) : +b.wvht * 3.28084) : null,
-        cur: null, curDir: b.wdir != null ? +b.wdir : null
-      };
-      nodeData.push(node);
-    });
-
-    Promise.all(pending).then(function () {
-      h3d.nodes = nodeData;
-      renderThicknessColumns(lat, lon, nodeData);
+  function buildWaterTopo(lat, lon) {
+    clearHydroGroup();
+    var nearby = nearestMany(lat, lon, stations, 90, 20);
+    var nearbyB = nearestMany(lat, lon, buoys.filter(function (b) { return b.hasObs; }), 90, 12);
+    var probes = nearby.concat(nearbyB);
+    if (!probes.length) {
       var mode = document.getElementById("h3d-mode");
-      if (mode) mode.textContent = "LIVE";
-      var nn = document.getElementById("h3d-nodes");
-      if (nn) nn.textContent = String(nodeData.length);
+      if (mode) mode.textContent = "NO SENSORS NEARBY";
+      return;
+    }
+
+    // Fetch live WL / temp for CO-OPS stations in parallel
+    var fetches = probes.map(function (p) {
+      var s = p.s;
+      if (s.kind === "buoy" || s.type === "buoy" || (s.id && /^[A-Z0-9]+$/i.test(s.id) && s.id.length <= 5 && !/^\d+$/.test(s.id))) {
+        // NDBC already has obs on object
+        return Promise.resolve({
+          id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "buoy",
+          wl: s.wvht != null && typeof mToFt === "function" ? mToFt(s.wvht) : (s.wvht != null ? +s.wvht : null),
+          sst: s.wtmp != null && typeof cToF === "function" ? cToF(s.wtmp) : null,
+          wave: s.wvht != null && typeof mToFt === "function" ? mToFt(s.wvht) : null,
+          cur: s.wind != null ? +s.wind : null, curDir: s.wdir
+        });
+      }
+      // CO-OPS
+      return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+        + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          var wl = j && j.data && j.data[0] && j.data[0].v != null ? +j.data[0].v : null;
+          return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+            + "&product=water_temperature&datum=MLLW&units=english&time_zone=gmt&format=json")
+            .then(function (r2) { return r2.ok ? r2.json() : null; })
+            .then(function (j2) {
+              var sst = j2 && j2.data && j2.data[0] && j2.data[0].v != null ? +j2.data[0].v : null;
+              return {
+                id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops",
+                wl: wl, sst: sst, wave: null, cur: null, curDir: null
+              };
+            })
+            .catch(function () {
+              return { id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops", wl: wl, sst: null };
+            });
+        })
+        .catch(function () {
+          return { id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops", wl: null, sst: null };
+        });
+    });
+
+    Promise.all(fetches).then(function (nodes) {
+      nodes = nodes.filter(function (n) { return n && (n.wl != null || n.sst != null); });
+      h3d.nodes = nodes;
+      if (!nodes.length) {
+        var mode = document.getElementById("h3d-mode");
+        if (mode) mode.textContent = "NO LIVE VALUES";
+        return;
+      }
+      renderWaterTopoSurface(lat, lon, nodes);
+      var mode = document.getElementById("h3d-mode");
+      if (mode) mode.textContent = "TOPO · " + nodes.length + " sensors";
+      var cnt = document.getElementById("h3d-count");
+      if (cnt) cnt.textContent = String(nodes.length);
     });
   }
 
-  function projectLocal(lat, lon, originLat, originLon) {
-    // rough meters → scene units (1 unit ≈ 3 km)
-    var dx = (lon - originLon) * 111 * Math.cos(originLat * Math.PI / 180);
-    var dz = (lat - originLat) * 111;
-    return { x: dx / 3, z: -dz / 3 };
-  }
-
-  function renderThicknessColumns(originLat, originLon, nodes) {
+  function renderWaterTopoSurface(originLat, originLon, nodes) {
     if (!h3d.group) return;
-    nodes.forEach(function (n) {
-      var p = projectLocal(n.lat, n.lng, originLat, originLon);
-      // clamp to grid
-      if (Math.abs(p.x) > 9.5 || Math.abs(p.z) > 9.5) {
-        var sc = 9.5 / Math.max(Math.abs(p.x), Math.abs(p.z));
-        p.x *= sc; p.z *= sc;
+
+    // Scale: world units ≈ km * scaleFactor around origin
+    var scale = 0.55; // km → scene units
+    var halfKm = 18;  // half-extent of topo grid in km
+    var segs = 48;    // resolution
+
+    // Collect WL range for normalization
+    var wls = nodes.map(function (n) { return n.wl; }).filter(function (v) { return v != null && !isNaN(v); });
+    var minWl = wls.length ? Math.min.apply(null, wls) : 0;
+    var maxWl = wls.length ? Math.max.apply(null, wls) : 1;
+    if (maxWl - minWl < 0.4) { minWl -= 0.5; maxWl += 0.5; }
+    var midWl = (minWl + maxWl) / 2;
+
+    // Height exaggeration: feet → scene units
+    function wlToY(wl) {
+      if (wl == null) return 0.05;
+      return 0.4 + ((wl - minWl) / (maxWl - minWl || 1)) * 5.5;
+    }
+
+    // Build surface geometry
+    var geo = new THREE.PlaneGeometry(halfKm * 2 * scale, halfKm * 2 * scale, segs, segs);
+    geo.rotateX(-Math.PI / 2);
+    var pos = geo.attributes.position;
+    var colors = new Float32Array(pos.count * 3);
+    var colorAttr = new THREE.BufferAttribute(colors, 3);
+
+    for (var i = 0; i < pos.count; i++) {
+      var x = pos.getX(i);
+      var z = pos.getZ(i);
+      // scene → km offset
+      var dE = x / scale; // east km
+      var dN = -z / scale; // north km (scene -Z is north-ish)
+      // approx lat/lon
+      var lat = originLat + (dN / 111.32);
+      var lon = originLon + (dE / (111.32 * Math.cos(originLat * Math.PI / 180)));
+      var wl = idw(lat, lon, nodes, 2.2);
+      var sst = idwTemp(lat, lon, nodes);
+      var y = wlToY(wl);
+      pos.setY(i, y);
+
+      // Color by water-level anomaly (or temp if available)
+      var t;
+      if (sst != null) {
+        t = (sst - 40) / 50;
+      } else if (wl != null) {
+        t = (wl - minWl) / (maxWl - minWl || 1);
+      } else {
+        t = 0.35;
       }
+      var col = heightColor(t);
+      colors[i * 3] = col.r;
+      colors[i * 3 + 1] = col.g;
+      colors[i * 3 + 2] = col.b;
+    }
+    pos.needsUpdate = true;
+    geo.setAttribute("color", colorAttr);
+    geo.computeVertexNormals();
 
-      var wl = n.wl != null ? n.wl : (n.wave != null ? n.wave * 0.4 : 1.5);
-      var height = Math.max(0.35, Math.min(6.5, 0.4 + Math.abs(wl) * 0.45));
-      var col = tempColor(n.sst);
+    var mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 0.15,
+      roughness: 0.45,
+      flatShading: true, // topo / contour faceted look
+      side: THREE.DoubleSide
+    });
+    var mesh = new THREE.Mesh(geo, mat);
+    h3d.surface = mesh;
+    h3d.group.add(mesh);
 
-      // Main thickness column (water level)
-      var geo = new THREE.BoxGeometry(0.55, height, 0.55);
-      var mat = new THREE.MeshStandardMaterial({
-        color: col, metalness: 0.25, roughness: 0.45,
-        emissive: col.clone().multiplyScalar(0.15)
-      });
-      var mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(p.x, height / 2, p.z);
-      mesh.userData.node = n;
-      h3d.group.add(mesh);
+    // Contour wireframe overlay
+    var wireGeo = geo.clone();
+    var wire = new THREE.Mesh(
+      wireGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x0ea5e9,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.22
+      })
+    );
+    wire.position.y = 0.02;
+    h3d.wire = wire;
+    h3d.group.add(wire);
 
-      // Height label sprite (canvas texture)
+    // Zero-plane ring (MLLW reference)
+    var ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.3, halfKm * 2 * scale * 0.98, 64),
+      new THREE.MeshBasicMaterial({ color: 0x1e3a5f, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    h3d.group.add(ring);
+
+    // Station pins + labels
+    nodes.forEach(function (n) {
+      var dE = (n.lng - originLon) * 111.32 * Math.cos(originLat * Math.PI / 180);
+      var dN = (n.lat - originLat) * 111.32;
+      if (Math.abs(dE) > halfKm || Math.abs(dN) > halfKm) return;
+      var x = dE * scale;
+      var z = -dN * scale;
+      var y = wlToY(n.wl);
+
+      // Pin stem
+      var stemH = Math.max(0.6, y + 0.8);
+      var stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.06, stemH, 8),
+        new THREE.MeshStandardMaterial({ color: n.kind === "buoy" ? 0xf59e0b : 0x22d3ee, emissive: n.kind === "buoy" ? 0x7c2d12 : 0x0e7490, emissiveIntensity: 0.35 })
+      );
+      stem.position.set(x, stemH / 2, z);
+      h3d.group.add(stem);
+
+      // Sphere head
+      var head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.22, 12, 12),
+        new THREE.MeshStandardMaterial({ color: n.kind === "buoy" ? 0xfbbf24 : 0x67e8f9, emissive: 0xffffff, emissiveIntensity: 0.15 })
+      );
+      head.position.set(x, stemH + 0.15, z);
+      h3d.group.add(head);
+
+      // Label sprite
       try {
         var lab = document.createElement("canvas");
-        lab.width = 256; lab.height = 64;
+        lab.width = 320; lab.height = 80;
         var ctx = lab.getContext("2d");
-        ctx.fillStyle = "rgba(0,0,0,0.65)";
-        ctx.fillRect(0, 0, 256, 64);
-        ctx.fillStyle = "#e2e8f0";
-        ctx.font = "bold 22px Inter, sans-serif";
+        ctx.fillStyle = "rgba(6,12,22,0.82)";
+        ctx.roundRect(0, 0, 320, 80, 10);
+        ctx.fill();
+        ctx.strokeStyle = n.kind === "buoy" ? "#f59e0b" : "#22d3ee";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = "#f1f5f9";
+        ctx.font = "bold 22px Inter, system-ui, sans-serif";
         ctx.textAlign = "center";
-        var labText = (n.name || n.id).slice(0, 18);
-        ctx.fillText(labText, 128, 28);
+        ctx.fillText((n.name || n.id).slice(0, 22), 160, 32);
         ctx.font = "18px JetBrains Mono, monospace";
-        ctx.fillStyle = "#22d3ee";
-        var sub = (n.wl != null ? n.wl.toFixed(1) + " ft" : "") + (n.sst != null ? " · " + n.sst.toFixed(0) + "°F" : "");
-        ctx.fillText(sub || n.kind, 128, 52);
+        ctx.fillStyle = n.kind === "buoy" ? "#fbbf24" : "#67e8f9";
+        var sub = [];
+        if (n.wl != null) sub.push(n.wl.toFixed(2) + " ft");
+        if (n.sst != null) sub.push(n.sst.toFixed(0) + "°F");
+        ctx.fillText(sub.join(" · ") || n.id, 160, 58);
         var tex = new THREE.CanvasTexture(lab);
         var spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-        spr.scale.set(2.2, 0.55, 1);
-        spr.position.set(p.x, height + 0.85 + (n.wave != null ? Math.min(1.8, n.wave * 0.22) : 0), p.z);
+        spr.scale.set(3.2, 0.8, 1);
+        spr.position.set(x, stemH + 1.1, z);
         h3d.group.add(spr);
       } catch (e) {}
-
-      // Wave cap (secondary thickness)
-      if (n.wave != null && n.wave > 0.2) {
-        var capH = Math.min(1.8, n.wave * 0.22);
-        var cap = new THREE.Mesh(
-          new THREE.BoxGeometry(0.62, capH, 0.62),
-          new THREE.MeshStandardMaterial({ color: 0x93c5fd, transparent: true, opacity: 0.7, metalness: 0.1, roughness: 0.3 })
-        );
-        cap.position.set(p.x, height + capH / 2, p.z);
-        h3d.group.add(cap);
-      }
-
-      // Flow arrow
-      if (n.cur != null || n.curDir != null) {
-        var dir = ((n.curDir != null ? n.curDir : 90) * Math.PI) / 180;
-        var len = 0.6 + Math.min(1.8, (n.cur || 0.5) * 0.5);
-        var arrow = new THREE.ArrowHelper(
-          new THREE.Vector3(Math.sin(dir), 0, -Math.cos(dir)).normalize(),
-          new THREE.Vector3(p.x, height + 0.15, p.z),
-          len, 0x2dd4bf, 0.25, 0.18
-        );
-        h3d.group.add(arrow);
-      }
-
-      // Clickable label sphere for picking
-      var hit = new THREE.Mesh(
-        new THREE.SphereGeometry(0.2, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.01 })
-      );
-      hit.position.set(p.x, height + 0.3, p.z);
-      hit.userData.node = n;
-      h3d.group.add(hit);
     });
+
+    // Center sample marker
+    var center = new THREE.Mesh(
+      new THREE.ConeGeometry(0.35, 0.9, 4),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x22d3ee, emissiveIntensity: 0.5 })
+    );
+    center.position.set(0, wlToY(idw(originLat, originLon, nodes)) + 0.6, 0);
+    center.rotation.y = Math.PI / 4;
+    h3d.group.add(center);
+
+    // Legend strip as 3D plane at edge
+    try {
+      var lg = document.createElement("canvas");
+      lg.width = 512; lg.height = 48;
+      var lgx = lg.getContext("2d");
+      var grd = lgx.createLinearGradient(0, 0, 512, 0);
+      for (var s = 0; s <= 1; s += 0.1) {
+        var c = heightColor(s);
+        grd.addColorStop(s, "rgb(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + "," + Math.round(c.b * 255) + ")");
+      }
+      lgx.fillStyle = grd;
+      lgx.fillRect(0, 0, 512, 48);
+      lgx.fillStyle = "#fff";
+      lgx.font = "14px sans-serif";
+      lgx.fillText("low / cool", 8, 30);
+      lgx.fillText("high / warm", 400, 30);
+      var ltex = new THREE.CanvasTexture(lg);
+      var lspr = new THREE.Sprite(new THREE.SpriteMaterial({ map: ltex, transparent: true }));
+      lspr.scale.set(8, 0.75, 1);
+      lspr.position.set(0, 0.3, halfKm * scale + 1.2);
+      h3d.group.add(lspr);
+    } catch (e) {}
   }
 
   function animateHydro3D() {
     h3d.anim = requestAnimationFrame(animateHydro3D);
     if (!h3d.renderer || !h3d.scene || !h3d.camera) return;
-    var t = performance.now() * 0.001;
-    h3d.camera.position.x = Math.sin(t * 0.12) * 16;
-    h3d.camera.position.z = Math.cos(t * 0.12) * 16;
-    h3d.camera.position.y = 11 + Math.sin(t * 0.2) * 1.2;
-    h3d.camera.lookAt(0, 1.5, 0);
+    h3d.t0 = (h3d.t0 || 0) + 0.004;
+    // Gentle orbit
+    var r = 20;
+    h3d.camera.position.x = Math.sin(h3d.t0 * 0.35) * r;
+    h3d.camera.position.z = Math.cos(h3d.t0 * 0.35) * r;
+    h3d.camera.position.y = 12 + Math.sin(h3d.t0 * 0.5) * 1.5;
+    h3d.camera.lookAt(0, 2, 0);
+    // Subtle surface pulse
+    if (h3d.surface && h3d.surface.material) {
+      h3d.surface.material.emissive = h3d.surface.material.emissive || new THREE.Color(0x000000);
+    }
     h3d.renderer.render(h3d.scene, h3d.camera);
   }
-
 
   // ---------- DOCKED DETAIL PANE: gauges + charts ----------
   function showDetailPane(title, sub, htmlBody) {
