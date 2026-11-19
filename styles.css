@@ -405,6 +405,16 @@ button, input, select { font: inherit; color: inherit; }
 
 .leaflet-container { background: #0a1018 !important; font-family: var(--font); height: 100% !important; width: 100% !important; }
 .leaflet-control-attribution { display: none !important; }
+/* Prevent default Leaflet chrome (white boxes) in upper-left / corners */
+.leaflet-control-zoom,
+.leaflet-control-layers,
+.leaflet-bar,
+.leaflet-top.leaflet-left .leaflet-control {
+  display: none !important;
+}
+.leaflet-container .leaflet-control-container .leaflet-top.leaflet-left {
+  display: none !important;
+}
 .leaflet-tooltip {
   background: var(--bg-elev) !important; border: 1px solid var(--border-strong) !important;
   color: var(--text) !important; border-radius: 8px !important;
@@ -1059,9 +1069,13 @@ button, input, select { font: inherit; color: inherit; }
 }
 .viz-split {
   display: grid;
-  grid-template-rows: minmax(200px, 1fr) minmax(220px, 1fr);
+  /* Lose former 4th column feel: give majority of right rail to topo (column 3) */
+  grid-template-rows: minmax(280px, 1.85fr) minmax(140px, 0.75fr);
   height: 100%;
   min-height: 0;
+}
+.viz-split.detail-collapsed {
+  grid-template-rows: 1fr 36px;
 }
 .thickness-pane {
   display: flex;
@@ -1076,6 +1090,10 @@ button, input, select { font: inherit; color: inherit; }
   min-height: 0;
   overflow: hidden;
   background: #070b12;
+  transition: min-height 0.18s var(--ease);
+}
+.detail-pane.collapsed .detail-body {
+  display: none;
 }
 .detail-head {
   display: flex;
@@ -1285,11 +1303,32 @@ button, input, select { font: inherit; color: inherit; }
 }
 /* Hide right rail if any remnant */
 .right-rail, #splitRight { display: none !important; }
-/* Bigger 3D canvas area */
+/* Bigger 3D canvas area — absorbs space formerly used by a 4th column */
 .thickness-pane .h3d-view {
-  min-height: 220px;
-  flex: 1;
+  min-height: 260px;
+  flex: 1 1 auto;
+  position: relative;
+}
+.thickness-pane .h3d-view canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 .viz-rail {
-  min-width: 320px;
+  min-width: 340px;
+}
+/* Kill any leftover right-rail / white boxes from older 4-column layouts */
+.right-rail,
+#splitRight,
+.col-4,
+[data-col="4"] {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  overflow: hidden !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
 }

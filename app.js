@@ -2888,14 +2888,29 @@
     h3d._ro.observe(view);
 
     wireHydro3DControls();
-    if (map) {
+    if (map && !map._hydroClickBound) {
+      map._hydroClickBound = true;
+      // Click any ocean / map surface → build water-height topo (skip only pure marker icon hits)
       map.on("click", function (e) {
-        if (e.originalEvent && e.originalEvent.target && e.originalEvent.target.closest &&
-            e.originalEvent.target.closest(".leaflet-marker-icon")) return;
+        try {
+          var t = e.originalEvent && e.originalEvent.target;
+          if (t && t.closest && t.closest(".leaflet-marker-icon, .leaflet-popup, .leaflet-control")) return;
+        } catch (err) {}
         setHydroSample(e.latlng.lat, e.latlng.lng, null);
       });
     }
-    setTimeout(function () { setHydroSample(39.9331, -75.142, "phl"); }, 1500);
+    // Wait until station/buoy lists have a chance to load before first sample
+    function tryInitialSample(attempt) {
+      attempt = attempt || 0;
+      var ready = (Array.isArray(stations) && stations.length > 5) ||
+                  (Array.isArray(buoyStations) && buoyStations.length > 5);
+      if (ready || attempt > 12) {
+        setHydroSample(39.9331, -75.142, "phl");
+        return;
+      }
+      setTimeout(function () { tryInitialSample(attempt + 1); }, 400);
+    }
+    setTimeout(function () { tryInitialSample(0); }, 800);
     animateHydro3D();
   }
 
@@ -2927,6 +2942,20 @@
       var s = document.getElementById("detailSub");
       if (s) s.textContent = "Click a station or buoy on the map";
     };
+    // Collapse detail → hand vertical space to topo (column 3)
+    var coll = document.getElementById("detailCollapse");
+    if (coll) {
+      coll.onclick = function () {
+        var pane = document.getElementById("detailPane");
+        var split = document.querySelector(".viz-split");
+        if (!pane || !split) return;
+        var collapsed = pane.classList.toggle("collapsed");
+        split.classList.toggle("detail-collapsed", collapsed);
+        coll.textContent = collapsed ? "▴" : "▾";
+        coll.title = collapsed ? "Expand detail" : "Collapse detail — give space to topo";
+        setTimeout(function () { try { resizeHydro3D(); } catch (e) {} }, 60);
+      };
+    }
   }
 
   function setHydroSample(lat, lon, presetKey) {
@@ -3046,66 +3075,102 @@
 
   function buildWaterTopo(lat, lon) {
     clearHydroGroup();
-    var nearby = nearestMany(lat, lon, stations, 90, 20);
-    var nearbyB = nearestMany(lat, lon, buoys.filter(function (b) { return b.hasObs; }), 90, 12);
+    var modeEl = document.getElementById("h3d-mode");
+    if (modeEl) modeEl.textContent = "BUILDING TOPO…";
+
+    // Use global station lists (buoyStations — "buoys" was undefined and broke the build)
+    var stationList = Array.isArray(stations) ? stations : [];
+    var buoyList = Array.isArray(buoyStations)
+      ? buoyStations.filter(function (b) { return b && (b.hasObs || b.wtmp != null || b.wvht != null || b.tide != null); })
+      : [];
+    var nearby = nearestMany(lat, lon, stationList, 120, 24);
+    var nearbyB = nearestMany(lat, lon, buoyList, 120, 16);
     var probes = nearby.concat(nearbyB);
+
+    // Always produce a topo surface on ocean clicks, even with zero sensors
     if (!probes.length) {
-      var mode = document.getElementById("h3d-mode");
-      if (mode) mode.textContent = "NO SENSORS NEARBY";
+      if (modeEl) modeEl.textContent = "NO SENSORS NEARBY";
+      renderWaterTopoSurface(lat, lon, []);
+      var cnt0 = document.getElementById("h3d-nodes");
+      if (cnt0) cnt0.textContent = "0";
       return;
     }
 
-    // Fetch live WL / temp for CO-OPS stations in parallel
+    // Fetch live WL / temp for CO-OPS stations in parallel (cors-safe)
     var fetches = probes.map(function (p) {
       var s = p.s;
-      if (s.kind === "buoy" || s.type === "buoy" || (s.id && /^[A-Z0-9]+$/i.test(s.id) && s.id.length <= 5 && !/^\d+$/.test(s.id))) {
-        // NDBC already has obs on object
+      var isBuoy = s.kind === "buoy" || s.type === "buoy" ||
+        (s.id && /^[A-Z0-9]+$/i.test(String(s.id)) && String(s.id).length <= 5 && !/^\d+$/.test(String(s.id)));
+      if (isBuoy) {
+        var wlVal = null;
+        if (s.tide != null && s.tide !== "" && !isNaN(+s.tide)) wlVal = +s.tide;
+        else if (s.wvht != null) wlVal = typeof mToFt === "function" ? mToFt(s.wvht) : +s.wvht;
         return Promise.resolve({
           id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "buoy",
-          wl: s.wvht != null && typeof mToFt === "function" ? mToFt(s.wvht) : (s.wvht != null ? +s.wvht : null),
-          sst: s.wtmp != null && typeof cToF === "function" ? cToF(s.wtmp) : null,
-          wave: s.wvht != null && typeof mToFt === "function" ? mToFt(s.wvht) : null,
+          wl: wlVal,
+          sst: s.wtmp != null && typeof cToF === "function" ? cToF(s.wtmp) : (s.wtmp != null ? +s.wtmp : null),
+          wave: s.wvht != null && typeof mToFt === "function" ? mToFt(s.wvht) : (s.wvht != null ? +s.wvht : null),
           cur: s.wind != null ? +s.wind : null, curDir: s.wdir
         });
       }
-      // CO-OPS
-      return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
-        + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json")
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (j) {
-          var wl = j && j.data && j.data[0] && j.data[0].v != null ? +j.data[0].v : null;
-          return fetch(DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
-            + "&product=water_temperature&datum=MLLW&units=english&time_zone=gmt&format=json")
-            .then(function (r2) { return r2.ok ? r2.json() : null; })
-            .then(function (j2) {
-              var sst = j2 && j2.data && j2.data[0] && j2.data[0].v != null ? +j2.data[0].v : null;
-              return {
-                id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops",
-                wl: wl, sst: sst, wave: null, cur: null, curDir: null
-              };
-            })
-            .catch(function () {
-              return { id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops", wl: wl, sst: null };
-            });
-        })
-        .catch(function () {
-          return { id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops", wl: null, sst: null };
+      var wlUrl = DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+        + "&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json";
+      var wtUrl = DATAAPI + "?date=latest&station=" + encodeURIComponent(s.id)
+        + "&product=water_temperature&datum=MLLW&units=english&time_zone=gmt&format=json";
+      return corsJson(wlUrl).then(function (j) {
+        var wl = j && j.data && j.data[0] && j.data[0].v != null ? +j.data[0].v : null;
+        return corsJson(wtUrl).then(function (j2) {
+          var sst = j2 && j2.data && j2.data[0] && j2.data[0].v != null ? +j2.data[0].v : null;
+          return {
+            id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops",
+            wl: wl, sst: sst, wave: null, cur: null, curDir: null
+          };
+        }).catch(function () {
+          return { id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops", wl: wl, sst: null };
         });
+      }).catch(function () {
+        return { id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d, kind: "coops", wl: null, sst: null };
+      });
     });
 
-    Promise.all(fetches).then(function (nodes) {
-      nodes = nodes.filter(function (n) { return n && (n.wl != null || n.sst != null); });
+    // Hard timeout so UI never stays stuck on BUILDING TOPO…
+    var timed = Promise.race([
+      Promise.all(fetches),
+      new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 12000); })
+    ]);
+
+    timed.then(function (nodes) {
+      if (nodes == null) {
+        if (modeEl) modeEl.textContent = "TOPO TIMEOUT · sparse";
+        nodes = probes.map(function (p) {
+          var s = p.s;
+          return {
+            id: s.id, name: s.name || s.id, lat: s.lat, lng: s.lng, d: p.d,
+            kind: (s.type === "buoy" || s.kind === "buoy") ? "buoy" : "coops",
+            wl: s.wl != null ? +s.wl : (s.tide != null ? +s.tide : null),
+            sst: s.wtmp != null ? (typeof cToF === "function" ? cToF(s.wtmp) : +s.wtmp) : null
+          };
+        }).filter(function (n) { return n.wl != null || n.sst != null; });
+      } else {
+        nodes = nodes.filter(function (n) { return n && (n.wl != null || n.sst != null); });
+      }
       h3d.nodes = nodes;
       if (!nodes.length) {
-        var mode = document.getElementById("h3d-mode");
-        if (mode) mode.textContent = "NO LIVE VALUES";
+        if (modeEl) modeEl.textContent = "NO LIVE VALUES";
+        renderWaterTopoSurface(lat, lon, []);
+        var cnt = document.getElementById("h3d-nodes");
+        if (cnt) cnt.textContent = "0";
         return;
       }
       renderWaterTopoSurface(lat, lon, nodes);
-      var mode = document.getElementById("h3d-mode");
-      if (mode) mode.textContent = "TOPO · " + nodes.length + " sensors";
-      var cnt = document.getElementById("h3d-nodes");
-      if (cnt) cnt.textContent = String(nodes.length);
+      if (modeEl) modeEl.textContent = "TOPO · " + nodes.length + " sensors";
+      var cnt2 = document.getElementById("h3d-nodes");
+      if (cnt2) cnt2.textContent = String(nodes.length);
+      try { resizeHydro3D(); } catch (e) {}
+    }).catch(function (err) {
+      console.error("buildWaterTopo", err);
+      if (modeEl) modeEl.textContent = "TOPO ERROR";
+      renderWaterTopoSurface(lat, lon, []);
     });
   }
 
@@ -3236,11 +3301,20 @@
         lab.width = 320; lab.height = 80;
         var ctx = lab.getContext("2d");
         ctx.fillStyle = "rgba(6,12,22,0.82)";
-        ctx.roundRect(0, 0, 320, 80, 10);
-        ctx.fill();
-        ctx.strokeStyle = n.kind === "buoy" ? "#f59e0b" : "#22d3ee";
-        ctx.lineWidth = 3;
-        ctx.stroke();
+        // roundRect may be missing on some canvas contexts — path fallback
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(0, 0, 320, 80, 10);
+          ctx.fill();
+          ctx.strokeStyle = n.kind === "buoy" ? "#f59e0b" : "#22d3ee";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        } else {
+          ctx.fillRect(0, 0, 320, 80);
+          ctx.strokeStyle = n.kind === "buoy" ? "#f59e0b" : "#22d3ee";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(1.5, 1.5, 317, 77);
+        }
         ctx.fillStyle = "#f1f5f9";
         ctx.font = "bold 22px Inter, system-ui, sans-serif";
         ctx.textAlign = "center";

@@ -3,9 +3,12 @@
 NOAA coastal dashboard with **multi-channel thickness mapping** (3D) and a **docked station detail pane**.
 
 ## Layout
-| Left | Center | Right (split) |
-|------|--------|----------------|
-| Filters (slim) | Leaflet map | **Thickness map** (top) + **Station detail** (bottom) |
+| Left | Center | Right (topo-first) |
+|------|--------|---------------------|
+| Filters / Stations | Leaflet map | **Water-height topo** (primary) + collapsible **Station detail** |
+
+Detail can be collapsed (▾) so the 3D topo absorbs the full right-rail height.
+Click any ocean surface on the map to sample and rebuild the IDW water-level surface.
 
 ## Multi-channel thickness map
 Inspired by hydrogeological / thickness block models:

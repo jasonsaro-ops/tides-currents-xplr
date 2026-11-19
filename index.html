@@ -254,7 +254,7 @@
             <div class="map-attribution" id="mapAttribution">
               Data © NOAA CO-OPS · NDBC · NWS · USGS · Map © OpenStreetMap
             </div>
-            <div class="map-hint" id="mapHint">Click map to sample location for 3D hydro</div>
+            <div class="map-hint" id="mapHint">Click any ocean surface to sample water-level topo</div>
           </div>
           <aside class="viz-rail" id="vizRail" aria-label="Water height topo and station detail">
           <div class="viz-split">
@@ -292,7 +292,10 @@
                   <div class="detail-title" id="detailTitle">Station detail</div>
                   <div class="detail-sub" id="detailSub">Click a station or buoy on the map</div>
                 </div>
-                <button type="button" class="icon-btn" id="detailClose" title="Clear">×</button>
+                <div class="detail-actions" style="display:flex;gap:4px;align-items:center">
+                  <button type="button" class="icon-btn" id="detailCollapse" title="Collapse detail — give space to topo">▾</button>
+                  <button type="button" class="icon-btn" id="detailClose" title="Clear">×</button>
+                </div>
               </header>
               <div class="detail-body" id="detailBody">
                 <p class="muted pad">Select a water-level station or NDBC buoy to load live observations, predictions, and metadata here.</p>
