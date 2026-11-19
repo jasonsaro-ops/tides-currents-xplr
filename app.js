@@ -2858,27 +2858,27 @@
     h3d.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
     h3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     h3d.renderer.setSize(w, h, false);
-    h3d.renderer.setClearColor(0x050a12, 1);
+    h3d.renderer.setClearColor(0x000000, 1); // pure black like classic scientific topo plates
 
     h3d.scene = new THREE.Scene();
-    h3d.scene.fog = new THREE.FogExp2(0x050a12, 0.022);
+    // Very light fog so distant ridges stay readable
+    h3d.scene.fog = new THREE.FogExp2(0x000000, 0.012);
 
-    h3d.camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 200);
-    h3d.camera.position.set(0, 16, 18);
-    h3d.camera.lookAt(0, 1.5, 0);
+    h3d.camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 220);
+    h3d.camera.position.set(0, 14, 20);
+    h3d.camera.lookAt(0, 1.2, 0);
 
-    h3d.scene.add(new THREE.AmbientLight(0xa0c4e8, 0.65));
-    var dir = new THREE.DirectionalLight(0xffffff, 1.05);
-    dir.position.set(10, 22, 8);
+    // Cool ambient + strong key light for relief shading
+    h3d.scene.add(new THREE.AmbientLight(0x94a3b8, 0.45));
+    var dir = new THREE.DirectionalLight(0xffffff, 1.25);
+    dir.position.set(12, 28, 10);
     h3d.scene.add(dir);
-    var fill = new THREE.DirectionalLight(0x38bdf8, 0.35);
-    fill.position.set(-8, 6, -10);
+    var fill = new THREE.DirectionalLight(0x38bdf8, 0.28);
+    fill.position.set(-10, 8, -12);
     h3d.scene.add(fill);
-
-    // Subtle reference grid at zero plane
-    var grid = new THREE.GridHelper(24, 24, 0x1e3a5f, 0x0b1220);
-    grid.position.y = 0;
-    h3d.scene.add(grid);
+    var rim = new THREE.DirectionalLight(0xfef3c7, 0.2);
+    rim.position.set(0, 6, -18);
+    h3d.scene.add(rim);
 
     h3d.group = new THREE.Group();
     h3d.scene.add(h3d.group);
@@ -2992,19 +2992,22 @@
     return scored.slice(0, limit);
   }
 
-  // Viridis-like ramp for water height anomaly / temp
+  // Scientific bathymetry / elevation ramp (classic seafloor topo style):
+  // deep blue (low) → cyan → green → yellow → orange → red / pale crest (high)
   function heightColor(t) {
-    // t 0..1
     t = Math.max(0, Math.min(1, t));
     var stops = [
-      [0.00, [13, 8, 135]],
-      [0.15, [70, 3, 159]],
-      [0.30, [125, 0, 142]],
-      [0.45, [170, 30, 110]],
-      [0.55, [200, 70, 60]],
-      [0.70, [225, 130, 30]],
-      [0.85, [240, 190, 40]],
-      [1.00, [250, 250, 120]]
+      [0.00, [8, 29, 88]],
+      [0.12, [12, 74, 140]],
+      [0.25, [14, 116, 180]],
+      [0.38, [6, 148, 162]],
+      [0.48, [16, 185, 129]],
+      [0.58, [132, 204, 22]],
+      [0.68, [234, 179, 8]],
+      [0.78, [249, 115, 22]],
+      [0.88, [239, 68, 68]],
+      [0.95, [252, 211, 77]],
+      [1.00, [254, 249, 195]]
     ];
     var a = stops[0], b = stops[stops.length - 1];
     for (var i = 0; i < stops.length - 1; i++) {
@@ -3177,25 +3180,35 @@
   function renderWaterTopoSurface(originLat, originLon, nodes) {
     if (!h3d.group) return;
 
-    // Scale: world units ≈ km * scaleFactor around origin
-    var scale = 0.55; // km → scene units
-    var halfKm = 18;  // half-extent of topo grid in km
-    var segs = 48;    // resolution
+    // Higher-resolution scientific elevation surface (bathymetry-style)
+    var scale = 0.58;   // km → scene units
+    var halfKm = 20;    // half-extent of topo grid in km
+    var segs = 72;      // denser mesh for smooth continuous relief
 
-    // Collect WL range for normalization
+    // Collect WL range for normalization (ft MLLW)
     var wls = nodes.map(function (n) { return n.wl; }).filter(function (v) { return v != null && !isNaN(v); });
     var minWl = wls.length ? Math.min.apply(null, wls) : 0;
     var maxWl = wls.length ? Math.max.apply(null, wls) : 1;
-    if (maxWl - minWl < 0.4) { minWl -= 0.5; maxWl += 0.5; }
-    var midWl = (minWl + maxWl) / 2;
+    if (maxWl - minWl < 0.35) { minWl -= 0.4; maxWl += 0.4; }
+    var range = (maxWl - minWl) || 1;
 
-    // Height exaggeration: feet → scene units
+    // Strong vertical exaggeration so height differences read like the classic topo maps
     function wlToY(wl) {
-      if (wl == null) return 0.05;
-      return 0.4 + ((wl - minWl) / (maxWl - minWl || 1)) * 5.5;
+      if (wl == null || isNaN(wl)) return 0.08;
+      return 0.15 + ((wl - minWl) / range) * 7.2;
     }
 
-    // Build surface geometry
+    // Update HTML colorbar labels
+    try {
+      var elMax = document.getElementById("topoCbarMax");
+      var elMin = document.getElementById("topoCbarMin");
+      var elMid = document.getElementById("topoCbarMid");
+      if (elMax) elMax.textContent = maxWl.toFixed(2);
+      if (elMin) elMin.textContent = minWl.toFixed(2);
+      if (elMid) elMid.textContent = "ft MLLW";
+    } catch (e) {}
+
+    // Build continuous height-colored surface
     var geo = new THREE.PlaneGeometry(halfKm * 2 * scale, halfKm * 2 * scale, segs, segs);
     geo.rotateX(-Math.PI / 2);
     var pos = geo.attributes.position;
@@ -3205,26 +3218,21 @@
     for (var i = 0; i < pos.count; i++) {
       var x = pos.getX(i);
       var z = pos.getZ(i);
-      // scene → km offset
-      var dE = x / scale; // east km
-      var dN = -z / scale; // north km (scene -Z is north-ish)
-      // approx lat/lon
+      var dE = x / scale;
+      var dN = -z / scale;
       var lat = originLat + (dN / 111.32);
       var lon = originLon + (dE / (111.32 * Math.cos(originLat * Math.PI / 180)));
-      var wl = idw(lat, lon, nodes, 2.2);
-      var sst = idwTemp(lat, lon, nodes);
+      var wl = idw(lat, lon, nodes, 2.4);
+      // Soft falloff toward domain edge when no sensors (gentle bowl so empty ocean still has form)
+      if (wl == null) {
+        var edge = Math.sqrt(dE * dE + dN * dN) / halfKm;
+        wl = minWl + range * (0.35 + 0.15 * Math.cos(edge * Math.PI));
+      }
       var y = wlToY(wl);
       pos.setY(i, y);
 
-      // Color by water-level anomaly (or temp if available)
-      var t;
-      if (sst != null) {
-        t = (sst - 40) / 50;
-      } else if (wl != null) {
-        t = (wl - minWl) / (maxWl - minWl || 1);
-      } else {
-        t = 0.35;
-      }
+      // Color strictly by water elevation (scientific continuous ramp)
+      var t = (wl - minWl) / range;
       var col = heightColor(t);
       colors[i * 3] = col.r;
       colors[i * 3 + 1] = col.g;
@@ -3234,42 +3242,45 @@
     geo.setAttribute("color", colorAttr);
     geo.computeVertexNormals();
 
+    // Smooth scientific surface (not faceted) with subtle specular
     var mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      metalness: 0.15,
-      roughness: 0.45,
-      flatShading: true, // topo / contour faceted look
-      side: THREE.DoubleSide
+      metalness: 0.08,
+      roughness: 0.55,
+      flatShading: false,
+      side: THREE.DoubleSide,
+      emissive: new THREE.Color(0x02060c),
+      emissiveIntensity: 0.12
     });
     var mesh = new THREE.Mesh(geo, mat);
     h3d.surface = mesh;
     h3d.group.add(mesh);
 
-    // Contour wireframe overlay
-    var wireGeo = geo.clone();
+    // Fine contour wireframe for topographic “ridge” definition
     var wire = new THREE.Mesh(
-      wireGeo,
+      geo.clone(),
       new THREE.MeshBasicMaterial({
-        color: 0x0ea5e9,
+        color: 0x0f172a,
         wireframe: true,
         transparent: true,
-        opacity: 0.22
+        opacity: 0.14,
+        depthWrite: false
       })
     );
-    wire.position.y = 0.02;
+    wire.position.y = 0.015;
     h3d.wire = wire;
     h3d.group.add(wire);
 
-    // Zero-plane ring (MLLW reference)
-    var ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.3, halfKm * 2 * scale * 0.98, 64),
-      new THREE.MeshBasicMaterial({ color: 0x1e3a5f, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+    // Dark ocean floor plate under the surface
+    var floor = new THREE.Mesh(
+      new THREE.CircleGeometry(halfKm * scale * 1.05, 64),
+      new THREE.MeshBasicMaterial({ color: 0x020617, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
     );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.02;
-    h3d.group.add(ring);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.05;
+    h3d.group.add(floor);
 
-    // Station pins + labels
+    // Station / buoy pins + labels
     nodes.forEach(function (n) {
       var dE = (n.lng - originLon) * 111.32 * Math.cos(originLat * Math.PI / 180);
       var dN = (n.lat - originLat) * 111.32;
@@ -3278,30 +3289,34 @@
       var z = -dN * scale;
       var y = wlToY(n.wl);
 
-      // Pin stem
-      var stemH = Math.max(0.6, y + 0.8);
+      var stemH = Math.max(0.7, y + 0.9);
       var stem = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.06, 0.06, stemH, 8),
-        new THREE.MeshStandardMaterial({ color: n.kind === "buoy" ? 0xf59e0b : 0x22d3ee, emissive: n.kind === "buoy" ? 0x7c2d12 : 0x0e7490, emissiveIntensity: 0.35 })
+        new THREE.CylinderGeometry(0.05, 0.05, stemH, 8),
+        new THREE.MeshStandardMaterial({
+          color: n.kind === "buoy" ? 0xf59e0b : 0x22d3ee,
+          emissive: n.kind === "buoy" ? 0x7c2d12 : 0x0e7490,
+          emissiveIntensity: 0.4
+        })
       );
       stem.position.set(x, stemH / 2, z);
       h3d.group.add(stem);
 
-      // Sphere head
       var head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.22, 12, 12),
-        new THREE.MeshStandardMaterial({ color: n.kind === "buoy" ? 0xfbbf24 : 0x67e8f9, emissive: 0xffffff, emissiveIntensity: 0.15 })
+        new THREE.SphereGeometry(0.2, 14, 14),
+        new THREE.MeshStandardMaterial({
+          color: n.kind === "buoy" ? 0xfbbf24 : 0x67e8f9,
+          emissive: 0xffffff,
+          emissiveIntensity: 0.18
+        })
       );
-      head.position.set(x, stemH + 0.15, z);
+      head.position.set(x, stemH + 0.14, z);
       h3d.group.add(head);
 
-      // Label sprite
       try {
         var lab = document.createElement("canvas");
         lab.width = 320; lab.height = 80;
         var ctx = lab.getContext("2d");
-        ctx.fillStyle = "rgba(6,12,22,0.82)";
-        // roundRect may be missing on some canvas contexts — path fallback
+        ctx.fillStyle = "rgba(2,6,18,0.88)";
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(0, 0, 320, 80, 10);
@@ -3327,59 +3342,33 @@
         ctx.fillText(sub.join(" · ") || n.id, 160, 58);
         var tex = new THREE.CanvasTexture(lab);
         var spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-        spr.scale.set(3.2, 0.8, 1);
-        spr.position.set(x, stemH + 1.1, z);
+        spr.scale.set(3.0, 0.75, 1);
+        spr.position.set(x, stemH + 1.05, z);
         h3d.group.add(spr);
       } catch (e) {}
     });
 
-    // Center sample marker
+    // Center sample marker (white cone)
+    var centerY = wlToY(idw(originLat, originLon, nodes));
     var center = new THREE.Mesh(
-      new THREE.ConeGeometry(0.35, 0.9, 4),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x22d3ee, emissiveIntensity: 0.5 })
+      new THREE.ConeGeometry(0.32, 0.85, 5),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x22d3ee, emissiveIntensity: 0.55 })
     );
-    center.position.set(0, wlToY(idw(originLat, originLon, nodes)) + 0.6, 0);
-    center.rotation.y = Math.PI / 4;
+    center.position.set(0, (isNaN(centerY) ? 0.5 : centerY) + 0.55, 0);
+    center.rotation.y = Math.PI / 5;
     h3d.group.add(center);
-
-    // Legend strip as 3D plane at edge
-    try {
-      var lg = document.createElement("canvas");
-      lg.width = 512; lg.height = 48;
-      var lgx = lg.getContext("2d");
-      var grd = lgx.createLinearGradient(0, 0, 512, 0);
-      for (var s = 0; s <= 1; s += 0.1) {
-        var c = heightColor(s);
-        grd.addColorStop(s, "rgb(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + "," + Math.round(c.b * 255) + ")");
-      }
-      lgx.fillStyle = grd;
-      lgx.fillRect(0, 0, 512, 48);
-      lgx.fillStyle = "#fff";
-      lgx.font = "14px sans-serif";
-      lgx.fillText("low / cool", 8, 30);
-      lgx.fillText("high / warm", 400, 30);
-      var ltex = new THREE.CanvasTexture(lg);
-      var lspr = new THREE.Sprite(new THREE.SpriteMaterial({ map: ltex, transparent: true }));
-      lspr.scale.set(8, 0.75, 1);
-      lspr.position.set(0, 0.3, halfKm * scale + 1.2);
-      h3d.group.add(lspr);
-    } catch (e) {}
   }
 
   function animateHydro3D() {
     h3d.anim = requestAnimationFrame(animateHydro3D);
     if (!h3d.renderer || !h3d.scene || !h3d.camera) return;
-    h3d.t0 = (h3d.t0 || 0) + 0.004;
-    // Gentle orbit
-    var r = 20;
-    h3d.camera.position.x = Math.sin(h3d.t0 * 0.35) * r;
-    h3d.camera.position.z = Math.cos(h3d.t0 * 0.35) * r;
-    h3d.camera.position.y = 12 + Math.sin(h3d.t0 * 0.5) * 1.5;
-    h3d.camera.lookAt(0, 2, 0);
-    // Subtle surface pulse
-    if (h3d.surface && h3d.surface.material) {
-      h3d.surface.material.emissive = h3d.surface.material.emissive || new THREE.Color(0x000000);
-    }
+    h3d.t0 = (h3d.t0 || 0) + 0.0035;
+    // Slow orbit with elevated viewpoint so ridges and color bands read clearly
+    var r = 21;
+    h3d.camera.position.x = Math.sin(h3d.t0 * 0.32) * r;
+    h3d.camera.position.z = Math.cos(h3d.t0 * 0.32) * r;
+    h3d.camera.position.y = 13.5 + Math.sin(h3d.t0 * 0.4) * 1.8;
+    h3d.camera.lookAt(0, 2.2, 0);
     h3d.renderer.render(h3d.scene, h3d.camera);
   }
 
